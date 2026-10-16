@@ -1,0 +1,18 @@
+[package]
+name = "cargo-visual-test"
+description = "CLI for gpui-visual-test: list pending checks, record agent verdicts, judge with models, and assert expectations against any PNG."
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cargo-visual-test"
+path = "src/main.rs"
+
+[dependencies]
+gpui-visual-test = { workspace = true, features = ["judges"] }
+serde_json.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
