@@ -79,9 +79,10 @@ defmodule GpuiVisualTest do
         []
 
       max ->
-        ["--diff", to_string(max)] ++
-          if(opts[:baseline_dir], do: ["--baseline-dir", to_string(opts[:baseline_dir])], else: []) ++
-          if(opts[:update_baseline], do: ["--update-baseline"], else: [])
+        base = opts[:baseline_dir]
+        dir = if base, do: ["--baseline-dir", to_string(base)], else: []
+        update = if opts[:update_baseline], do: ["--update-baseline"], else: []
+        ["--diff", to_string(max)] ++ dir ++ update
     end
   end
 
