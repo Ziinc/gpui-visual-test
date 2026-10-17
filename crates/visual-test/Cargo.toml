@@ -1,0 +1,38 @@
+[package]
+name = "gpui-visual-test"
+description = "Visual tests for GPUI: render views headlessly and judge screenshots against plain-English expectations with vision models, Jev, or an agent."
+readme = "../../README.md"
+keywords = ["gpui", "visual-testing", "screenshot", "llm", "testing"]
+categories = ["gui", "development-tools::testing"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Model judges over HTTP: OpenAI-compatible (OpenAI, Gemini, local), Anthropic
+# and TypeSafe Jev.
+judges = ["dep:ureq", "dep:base64"]
+# Headless capture of GPUI windows. Needs GPUI's offscreen renderer: Metal on
+# macOS, Vulkan on Linux (lavapipe in CI).
+capture = ["dep:gpui", "dep:gpui_platform", "gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+ureq = { version = "2.12", features = ["json"], optional = true }
+base64 = { version = "0.22", optional = true }
+gpui = { workspace = true, optional = true }
+
+[target.'cfg(not(any(target_os = "ios", target_os = "android", target_family = "wasm")))'.dependencies]
+gpui_platform = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "capture"
+required-features = ["capture"]

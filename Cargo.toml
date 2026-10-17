@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/visual-test", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/Ziinc/gpui-visual-test"
+
+[workspace.dependencies]
+gpui-visual-test = { path = "crates/visual-test", version = "0.1.0", default-features = false }
+# The gpui-pre snapshot gpui-kit 0.7.3 and gpui-styleguidist are built against.
+# Consumers must use the same one; bump them together.
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"

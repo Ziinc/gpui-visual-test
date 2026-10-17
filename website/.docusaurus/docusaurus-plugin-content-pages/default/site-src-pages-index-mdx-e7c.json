@@ -1,0 +1,13 @@
+{
+  "type": "mdx",
+  "permalink": "/gpui-visual-test/",
+  "source": "@site/src/pages/index.mdx",
+  "title": "gpui-visual-test",
+  "description": "Visual tests for GPUI judged in plain English by an agent, a vision model, or TypeSafe Jev.",
+  "frontMatter": {
+    "title": "gpui-visual-test",
+    "description": "Visual tests for GPUI judged in plain English by an agent, a vision model, or TypeSafe Jev.",
+    "hide_table_of_contents": false
+  },
+  "unlisted": false
+}
