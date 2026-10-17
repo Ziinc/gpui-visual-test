@@ -20,11 +20,29 @@ pub fn write_index(store: &Store) -> Result<PathBuf> {
     for m in &manifests {
         let image = format!("{}.png", m.name);
         html.push_str(&format!(
-            "<section><h2 class={status}>{name} <small>{status}</small></h2><a href=\"{image}\"><img src=\"{image}\" alt=\"{name}\"></a><ol start=0>",
+            "<section><h2 class={status}>{name} <small>{status}</small></h2><a href=\"{image}\"><img src=\"{image}\" alt=\"{name}\"></a>",
             status = m.status(),
             name = escape(&m.name),
             image = escape(&image),
         ));
+        if let Some(diff) = &m.diff {
+            html.push_str(&format!(
+                "<p class={status}><b>pixel diff {status}</b> {}</p>",
+                escape(&diff.reason),
+                status = diff.status,
+            ));
+            if let Some(image) = &diff.image {
+                let dir = std::path::Path::new(&m.name)
+                    .parent()
+                    .map(|p| format!("{}/", p.display()))
+                    .unwrap_or_default();
+                let image = escape(&format!("{dir}{image}"));
+                html.push_str(&format!(
+                    "<a href=\"{image}\"><img src=\"{image}\" alt=\"pixel diff\"></a>"
+                ));
+            }
+        }
+        html.push_str("<ol start=0>");
         for entry in &m.checks {
             let status = entry.status();
             html.push_str(&format!(

@@ -4,7 +4,7 @@
 //! agents. A verdict recorded for an image stays valid while the image is
 //! unchanged, so an agent can review a shot once and later runs reuse it.
 
-use crate::{Expectation, Region, Status, Verdict};
+use crate::{BaselineDiff, Expectation, Region, Status, Verdict};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -48,6 +48,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<serde_json::Value>,
     pub checks: Vec<Entry>,
+    /// The pixel-diff layer, when the check compared against a baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<BaselineDiff>,
 }
 
 impl Manifest {
@@ -62,13 +65,15 @@ impl Manifest {
         write_atomic(path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 
-    /// Worst status over expectations that can fail the check.
+    /// Worst status over the pixel diff and the expectations that can fail
+    /// the check.
     pub fn status(&self) -> Status {
         let statuses = self
             .checks
             .iter()
             .filter(|e| e.expectation.severity == crate::Severity::Must)
-            .map(Entry::status);
+            .map(Entry::status)
+            .chain(self.diff.as_ref().map(|d| d.status));
         let mut worst = Status::Pass;
         for status in statuses {
             match status {
@@ -102,31 +107,33 @@ impl Store {
         if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
             return PathBuf::from(target).join("visual-test");
         }
-        let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-        let root = cwd
-            .ancestors()
-            .find(|dir| dir.join("Cargo.lock").exists())
-            .unwrap_or(&cwd);
-        root.join("target").join("visual-test")
+        workspace_root().join("target").join("visual-test")
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
+    /// `<name>.diff.png`, the pixel diff against the baseline.
+    pub fn diff_path(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.diff.png"))
+    }
+
     /// Rejects names that would land outside the directory or collide:
-    /// empty, absolute, `.`/`..` or empty segments, or backslashes.
+    /// empty, absolute, `.`/`..` or empty segments, backslashes, or a
+    /// `.diff` ending (taken by diff images).
     pub fn validate_name(name: &str) -> Result<()> {
         let bad = name.is_empty()
             || name.starts_with('/')
             || name.contains('\\')
             || name.contains(':')
+            || name.ends_with(".diff")
             || name
                 .split('/')
                 .any(|seg| seg.is_empty() || seg == "." || seg == "..");
         if bad {
             anyhow::bail!(
-                "shot name {name:?} must be a relative path of non-empty segments, without `.`, `..`, `\\` or `:`"
+                "shot name {name:?} must be a relative path of non-empty segments, without `.`, `..`, `\\`, `:` or a `.diff` ending"
             );
         }
         Ok(())
@@ -176,6 +183,40 @@ impl Store {
         manifest.save(&path)?;
         Ok(manifest)
     }
+
+    /// Accepts a shot's current image as the baseline its pixel diff
+    /// compares against, and marks the diff layer passed. The baseline goes
+    /// to `baseline_dir`, else where the last diff looked, else the default
+    /// baseline directory.
+    pub fn approve(&self, name: &str, baseline_dir: Option<&Path>) -> Result<Manifest> {
+        Self::validate_name(name)?;
+        let path = self.manifest_path(name);
+        let mut manifest = Manifest::load(&path)?;
+        let baseline = match (baseline_dir, &manifest.diff) {
+            (Some(dir), _) => dir.join(format!("{name}.png")),
+            (None, Some(diff)) => diff.baseline.clone(),
+            (None, None) => crate::diff::default_baseline_dir().join(format!("{name}.png")),
+        };
+        let image = self.image_path(name);
+        let bytes = fs::read(&image).with_context(|| format!("reading {}", image.display()))?;
+        write_atomic(&baseline, &bytes)?;
+        if let Some(diff) = &mut manifest.diff {
+            diff.baseline = std::path::absolute(&baseline)?;
+            diff.status = Status::Pass;
+            diff.reason = "approved as the baseline".into();
+            manifest.save(&path)?;
+        }
+        Ok(manifest)
+    }
+}
+
+/// The nearest directory up from the current one holding `Cargo.lock`.
+pub(crate) fn workspace_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    cwd.ancestors()
+        .find(|dir| dir.join("Cargo.lock").exists())
+        .unwrap_or(&cwd)
+        .to_path_buf()
 }
 
 fn collect(dir: &Path, found: &mut Vec<Manifest>) -> Result<()> {

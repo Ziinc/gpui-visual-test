@@ -31,6 +31,21 @@ confirm by looking. Exit codes everywhere: 0 pass, 1 fail, 2 needs a decision,
 A failing check is a real finding: report it, or fix the UI and re-run.
 Never flip a verdict to pass without looking at the current image.
 
+## Pixel diffs
+
+A shot checked with a diff layer (`with_diff(max)`, or `check --diff max`)
+carries a `diff` object in `--json` output: `status`, `reason` (share and
+area changed), `baseline` (the approved PNG) and `image` (`<name>.diff.png`,
+changes in magenta).
+
+- `unsure` means no baseline yet: look at the image, and if it is right,
+  `cargo visual-test approve <name>`.
+- `fail` means pixels changed. Open the diff image and the shot. Approve only
+  when the change is what the task intended; otherwise it is a regression to
+  report or fix. Never approve to make a run green.
+- `cargo visual-test diff before.png after.png --out diff.png --json`
+  compares any two images.
+
 ## Check any image
 
 ```sh

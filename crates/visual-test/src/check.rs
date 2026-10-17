@@ -2,8 +2,10 @@
 //! unchanged images.
 
 use crate::{
-    Entry, Expectation, Judge, Manifest, Severity, Shot, Status, Store, Verdict, shot::difference,
-    store::MANIFEST_VERSION,
+    BaselineDiff, Entry, Expectation, Judge, Manifest, Severity, Shot, Status, Store, Verdict,
+    diff::{DEFAULT_THRESHOLD, default_baseline_dir, diff},
+    shot::difference,
+    store::{MANIFEST_VERSION, write_atomic},
 };
 use anyhow::{Context as _, Result, bail};
 use std::{fmt, path::PathBuf};
@@ -17,6 +19,10 @@ pub struct Check {
     tolerance: f64,
     rejudge: bool,
     allow_unsure: bool,
+    max_diff: Option<f64>,
+    baseline_dir: Option<PathBuf>,
+    threshold: u8,
+    update_baseline: bool,
 }
 
 impl Check {
@@ -28,6 +34,10 @@ impl Check {
             tolerance: 0.,
             rejudge: env_flag("GPUI_VISUAL_REJUDGE"),
             allow_unsure: std::env::var("GPUI_VISUAL_UNSURE").is_ok_and(|v| v == "warn"),
+            max_diff: None,
+            baseline_dir: None,
+            threshold: DEFAULT_THRESHOLD,
+            update_baseline: env_flag("GPUI_VISUAL_UPDATE"),
         }
     }
 
@@ -59,10 +69,46 @@ impl Check {
         self
     }
 
+    /// Adds a pixel-diff layer: compares the shot with its approved baseline
+    /// and fails when more than `max` (0 to 1) of its pixels changed. With no
+    /// baseline yet, the layer is pending until one is approved. With this
+    /// layer, a check needs no expectations.
+    pub fn with_diff(mut self, max: f64) -> Self {
+        self.max_diff = Some(max);
+        self
+    }
+
+    /// Where approved baselines live. Defaults to
+    /// `$GPUI_VISUAL_BASELINE_DIR`, else `visual-baselines/` at the
+    /// workspace root.
+    pub fn with_baseline_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.baseline_dir = Some(dir.into());
+        self
+    }
+
+    /// Channel difference (0 to 255) a pixel may have before it counts as
+    /// changed. Defaults to [`DEFAULT_THRESHOLD`].
+    pub fn with_diff_threshold(mut self, threshold: u8) -> Self {
+        self.threshold = threshold;
+        self
+    }
+
+    /// Accepts the shot as the new baseline instead of failing on a
+    /// difference. Also set by `GPUI_VISUAL_UPDATE=1`.
+    pub fn update_baseline(mut self, update: bool) -> Self {
+        self.update_baseline = update;
+        self
+    }
+
     /// Judges the expectations, writes `<name>.png` and `<name>.json`, and
     /// returns the verdicts. Never panics on a failed expectation.
     pub fn run(self, judge: &dyn Judge) -> Result<Outcome> {
-        if self.expectations.is_empty() {
+        if let Some(max) = self.max_diff
+            && !(0. ..=1.).contains(&max)
+        {
+            bail!("pixel diff max {max} must be between 0 and 1");
+        }
+        if self.expectations.is_empty() && self.max_diff.is_none() {
             bail!(
                 "`{}` has no expectations: list what a viewer should be able to confirm by looking at it",
                 self.shot.name()
@@ -137,9 +183,16 @@ impl Check {
             }
         }
 
+        let diff = self
+            .max_diff
+            .map(|max| self.compare(&name, max))
+            .transpose()?;
+
         // When every verdict was reused within tolerance, keep the judged
-        // image as the baseline so small changes cannot drift unnoticed.
-        let keep_baseline = judged == 0 && previous.as_ref().is_some_and(|p| p.hash != hash);
+        // image so small changes cannot drift unnoticed. A pixel diff guards
+        // against drift itself, so with one the new image is always kept.
+        let keep_baseline =
+            diff.is_none() && judged == 0 && previous.as_ref().is_some_and(|p| p.hash != hash);
         let (width, height) = self.shot.image().dimensions();
         let manifest = Manifest {
             version: MANIFEST_VERSION,
@@ -168,9 +221,10 @@ impl Check {
                     verdict,
                 })
                 .collect(),
+            diff,
         };
         if !keep_baseline {
-            crate::store::write_atomic(&image_path, &self.shot.png()?)?;
+            write_atomic(&image_path, &self.shot.png()?)?;
         }
         manifest.save(&manifest_path)?;
         crate::report::write_index(&self.store)?;
@@ -182,6 +236,91 @@ impl Check {
             judged,
             allow_unsure: self.allow_unsure,
         })
+    }
+
+    /// The pixel-diff layer against `<baseline dir>/<name>.png`. Writes
+    /// `<name>.diff.png` when pixels changed, and the baseline when updating.
+    fn compare(&self, name: &str, max: f64) -> Result<BaselineDiff> {
+        let dir = self
+            .baseline_dir
+            .clone()
+            .unwrap_or_else(default_baseline_dir);
+        let baseline = std::path::absolute(dir.join(format!("{name}.png")))?;
+        let diff_path = self.store.diff_path(name);
+        let mut layer = BaselineDiff {
+            baseline: baseline.clone(),
+            image: None,
+            changed: 0.,
+            max,
+            threshold: self.threshold,
+            bounds: None,
+            status: Status::Pass,
+            reason: String::new(),
+        };
+        if !baseline.exists() {
+            if self.update_baseline {
+                write_atomic(&baseline, &self.shot.png()?)?;
+                layer.reason = "baseline created".into();
+            } else {
+                layer.status = Status::Unsure;
+                layer.reason = format!(
+                    "no baseline yet; look at the image, then approve it with `cargo visual-test approve {name}`"
+                );
+            }
+            remove_stale(&diff_path)?;
+            return Ok(layer);
+        }
+        let before = image::open(&baseline)
+            .with_context(|| format!("reading baseline {}", baseline.display()))?
+            .to_rgba8();
+        let d = diff(&before, self.shot.image(), self.threshold);
+        layer.changed = d.ratio();
+        layer.bounds = d.bounds;
+        let percent = |r: f64| format!("{:.2}%", r * 100.);
+        layer.reason = match d.bounds {
+            None => "identical to the baseline".into(),
+            Some(b) => {
+                let resized = if d.resized {
+                    format!(
+                        ", size {}x{} -> {}x{}",
+                        before.width(),
+                        before.height(),
+                        self.shot.image().width(),
+                        self.shot.image().height()
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{} of pixels changed (max {}), within {},{} {}x{} px{resized}",
+                    percent(layer.changed),
+                    percent(max),
+                    b.x,
+                    b.y,
+                    b.width,
+                    b.height
+                )
+            }
+        };
+        if d.is_identical() {
+            remove_stale(&diff_path)?;
+        } else {
+            let mut png = Vec::new();
+            d.image
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .context("encoding diff PNG")?;
+            write_atomic(&diff_path, &png)?;
+            layer.image = diff_path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned());
+            if self.update_baseline {
+                write_atomic(&baseline, &self.shot.png()?)?;
+                layer.reason = format!("baseline updated: {}", layer.reason);
+            } else if d.resized || layer.changed > max {
+                layer.status = Status::Fail;
+            }
+        }
+        Ok(layer)
     }
 
     /// Runs and panics with a readable report unless every `Must`
@@ -243,15 +382,25 @@ impl Outcome {
         self.with_status(Severity::Must, Status::Unsure).collect()
     }
 
+    /// The pixel-diff layer's status, when the check has one.
+    pub fn diff_status(&self) -> Option<Status> {
+        self.manifest.diff.as_ref().map(|d| d.status)
+    }
+
     pub fn is_ok(&self) -> bool {
-        self.failures().is_empty() && (self.allow_unsure || self.unsure().is_empty())
+        let diff = self.diff_status().unwrap_or(Status::Pass);
+        self.failures().is_empty()
+            && diff != Status::Fail
+            && (self.allow_unsure || (self.unsure().is_empty() && diff != Status::Unsure))
     }
 
     fn has_warnings(&self) -> bool {
-        self.manifest
-            .checks
-            .iter()
-            .any(|e| e.status() != Status::Pass)
+        self.diff_status().is_some_and(|s| s != Status::Pass)
+            || self
+                .manifest
+                .checks
+                .iter()
+                .any(|e| e.status() != Status::Pass)
     }
 }
 
@@ -259,12 +408,27 @@ impl fmt::Display for Outcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = &self.manifest.name;
         writeln!(f, "visual check `{name}`: {}", self.image.display())?;
+        if let Some(diff) = &self.manifest.diff {
+            writeln!(
+                f,
+                "  [diff] {} {}\n        baseline: {}",
+                mark(diff.status),
+                diff.reason,
+                diff.baseline.display()
+            )?;
+            if let Some(image) = &diff.image {
+                let path = self.manifest_path.with_file_name(image);
+                writeln!(f, "        diff: {}", path.display())?;
+            }
+            if diff.status == Status::Fail {
+                writeln!(
+                    f,
+                    "        if the change is intended, accept it with\n          cargo visual-test approve {name}\n        or rerun with GPUI_VISUAL_UPDATE=1."
+                )?;
+            }
+        }
         for (i, entry) in self.manifest.checks.iter().enumerate() {
-            let mark = match entry.status() {
-                Status::Pass => "pass",
-                Status::Fail => "FAIL",
-                Status::Unsure => "????",
-            };
+            let mark = mark(entry.status());
             let should = if entry.expectation.severity == Severity::Should {
                 " (should)"
             } else {
@@ -286,6 +450,23 @@ impl fmt::Display for Outcome {
             )?;
         }
         Ok(())
+    }
+}
+
+fn mark(status: Status) -> &'static str {
+    match status {
+        Status::Pass => "pass",
+        Status::Fail => "FAIL",
+        Status::Unsure => "????",
+    }
+}
+
+fn remove_stale(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing {}", path.display()))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -433,5 +614,54 @@ mod tests {
                 .run(&judge)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn pixel_diff_against_an_approved_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let baselines = tempfile::tempdir().unwrap();
+        let check = |shot: Shot, max: f64, update: bool| {
+            shot.expect(Vec::<Expectation>::new())
+                .with_dir(dir.path())
+                .with_baseline_dir(baselines.path())
+                .with_diff(max)
+                .update_baseline(update)
+                .run(&AgentJudge)
+                .unwrap()
+        };
+
+        let new = check(shot(1), 0., false);
+        assert_eq!(new.diff_status(), Some(Status::Unsure));
+        assert!(!new.is_ok());
+
+        let created = check(shot(1), 0., true);
+        assert!(created.is_ok());
+        assert!(baselines.path().join("panel/save.png").exists());
+
+        let same = check(shot(1), 0., false);
+        assert!(same.is_ok());
+        assert!(same.manifest.diff.as_ref().unwrap().image.is_none());
+
+        let mut image = RgbaImage::from_pixel(8, 8, Rgba([1, 0, 0, 255]));
+        image.put_pixel(3, 4, Rgba([255, 255, 255, 255]));
+        let changed = check(Shot::new("panel/save", image.clone(), 1.), 0., false);
+        assert_eq!(changed.diff_status(), Some(Status::Fail));
+        let layer = changed.manifest.diff.as_ref().unwrap();
+        assert_eq!(layer.changed, 1. / 64.);
+        assert!(dir.path().join("panel/save.diff.png").exists());
+        assert!(
+            changed
+                .to_string()
+                .contains("cargo visual-test approve panel/save")
+        );
+
+        let tolerated = check(Shot::new("panel/save", image, 1.), 0.05, false);
+        assert!(tolerated.is_ok());
+
+        assert!(check(shot(1), 0., false).is_ok());
+        assert!(!dir.path().join("panel/save.diff.png").exists());
+
+        let resized = Shot::new("panel/save", RgbaImage::new(8, 9), 1.);
+        assert_eq!(check(resized, 1., false).diff_status(), Some(Status::Fail));
     }
 }

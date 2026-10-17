@@ -25,6 +25,7 @@
 #[cfg(feature = "capture")]
 pub mod capture;
 mod check;
+pub mod diff;
 mod expectation;
 pub mod judge;
 mod report;
@@ -33,7 +34,10 @@ mod store;
 mod verdict;
 
 pub use check::{Check, Outcome};
+pub use diff::{BaselineDiff, Bounds, Diff, diff};
 pub use expectation::{Expectation, Severity};
+/// The `image` crate this API takes and returns images from.
+pub use image;
 pub use judge::Judge;
 pub use report::write_index;
 pub use shot::{Region, Shot, difference};

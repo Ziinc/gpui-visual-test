@@ -33,6 +33,7 @@ const config = {
         logo: { alt: "", src: "img/favicon.svg" },
         items: [
           { to: "/#quick-start", label: "Quick start", position: "left" },
+          { to: "/#pixel-diff", label: "Pixel diff", position: "left" },
           { to: "/#judges", label: "Judges", position: "left" },
           { to: "/#agents", label: "Agents & CLI", position: "left" },
           { to: "/#reference", label: "Reference", position: "left" },
