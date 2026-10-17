@@ -61,6 +61,17 @@ pub fn capture_window(
     Ok(Shot::new(name, image, scale))
 }
 
+/// The last frame `window` drew, as a shot, for checking a running app
+/// from inside it (a test hook, a debug command) without a screen grab.
+/// Needs a platform that reads windows back
+/// (`PlatformWindow::render_to_image`), such as the headless renderer.
+pub fn window_shot(window: &Window, name: &str) -> Result<Shot> {
+    let image = window.render_to_image().with_context(|| {
+        format!("reading back `{name}`; this platform may not support render_to_image")
+    })?;
+    Ok(Shot::new(name, image, window.scale_factor()))
+}
+
 /// Opens `build`'s view in a hidden window, captures it, and closes the
 /// window.
 pub fn render_view<V: Render + 'static>(

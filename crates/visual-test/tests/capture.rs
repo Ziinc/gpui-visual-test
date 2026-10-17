@@ -59,3 +59,26 @@ fn captures_a_view_and_reuses_agent_verdicts() {
         .assert(&AgentJudge);
     assert_eq!(outcome.judged, 0, "an identical render reuses the verdict");
 }
+
+#[test]
+fn window_shot_reads_a_live_window() {
+    let mut cx = capture::headless_app(None).expect("headless renderer");
+    let handle: gpui::AnyWindowHandle = cx
+        .update(|cx| {
+            cx.open_window(capture::window_options(160., 100.), |_, cx| {
+                cx.new(|_| Panel)
+            })
+        })
+        .unwrap()
+        .into();
+    // Draw once, as a running app would have.
+    capture::capture_window(&mut cx, handle, "warmup").unwrap();
+    let shot = cx
+        .update_window(handle, |_, window, _| capture::window_shot(window, "live"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(shot.name(), "live");
+    let s = shot.scale();
+    let red = shot.image().get_pixel((40. * s) as u32, (30. * s) as u32);
+    assert!(red[0] > 180 && red[1] < 80, "red box rendered: {red:?}");
+}

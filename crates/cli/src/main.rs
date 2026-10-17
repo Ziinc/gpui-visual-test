@@ -72,6 +72,9 @@ enum Command {
         /// An expectation reported but never failing (repeatable).
         #[arg(long)]
         should: Vec<String>,
+        /// An expectation about one region: region=text (repeatable).
+        #[arg(long, value_name = "REGION=TEXT")]
+        expect_in: Vec<String>,
         /// A named area for expectations: id=x,y,width,height in logical px.
         #[arg(long)]
         region: Vec<String>,
@@ -315,6 +318,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             image,
             expect,
             should,
+            expect_in,
             region,
             name,
             scale,
@@ -325,7 +329,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             update_baseline,
             json,
         } => {
-            if expect.is_empty() && should.is_empty() && diff.is_none() {
+            if expect.is_empty() && should.is_empty() && expect_in.is_empty() && diff.is_none() {
                 bail!(
                     "give at least one --expect (what a viewer should be able to confirm by looking at the image) or --diff"
                 );
@@ -343,11 +347,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 let (id, x, y, w, h) = parse_region(spec)?;
                 shot = shot.with_region(id, x, y, w, h);
             }
-            let expectations: Vec<Expectation> = expect
+            let mut expectations: Vec<Expectation> = expect
                 .into_iter()
                 .map(Expectation::new)
                 .chain(should.into_iter().map(|t| Expectation::new(t).should()))
                 .collect();
+            for spec in &expect_in {
+                let (region, text) = spec
+                    .split_once('=')
+                    .filter(|(region, text)| !region.is_empty() && !text.is_empty())
+                    .with_context(|| {
+                        format!("--expect-in `{spec}` should look like toolbar=Save is greyed out")
+                    })?;
+                expectations.push(Expectation::new(text).in_region(region));
+            }
             let judge = pick_judge(judge)?;
             // Flags only switch things on, so GPUI_VISUAL_REJUDGE and
             // GPUI_VISUAL_UPDATE still work when they are not given.
