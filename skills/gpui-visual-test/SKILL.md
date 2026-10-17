@@ -57,10 +57,8 @@ Add `--judge openai:<model>` (or `anthropic:`, `gemini:`, `local:`,
 `jev:<model>+<vision spec>`) to have a model decide instead; otherwise record
 verdicts as above.
 
-## From Playwright or Elixir
+## From Playwright, ExUnit or any runner
 
-`expectVisual` / `expect_visual` (`integrations/playwright`) and
-`assert_visual` (`integrations/elixir`) run `cargo visual-test check --json`
-under the hood, so their shots land in the same directory and the review loop
-above applies unchanged. They need the CLI installed, or
-`$GPUI_VISUAL_TEST_CLI` pointing at it.
+Tests outside Rust save a PNG and run `cargo visual-test check <png> --name
+<name> -e "…"` (see the README's "Other test runners"). Their shots land in
+the same directory, so the review loop above applies unchanged.

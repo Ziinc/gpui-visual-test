@@ -305,53 +305,60 @@ image. The repository ships this loop as an agent skill in
 All commands take `--dir` to point at an output directory other than the
 default.
 
-## Integrations {#integrations}
+## Other test runners {#other-runners}
 
-Outside Rust tests, everything goes through `cargo visual-test check --json`,
-so verdict reuse, agent review and pixel diffs behave the same. Each helper
-finds the CLI at `$GPUI_VISUAL_TEST_CLI`, else `cargo-visual-test` on `PATH`.
+Any runner that can save a PNG and run a command can check it: call
+`cargo visual-test check`, which exits 0 on pass, 1 on fail and 2 when a
+decision or baseline is pending. Verdict reuse, agent review and pixel diffs
+work the same as in Rust tests. Add `--json` to read the manifest. Regions are
+in logical pixels; pass `--scale` with the device pixel ratio on HiDPI.
 
 ### Playwright and gpui-playwright
 
-[`integrations/playwright`](https://github.com/Ziinc/gpui-visual-test/tree/main/integrations/playwright) screenshots a Page or
-Locator, turns locators into named regions, and checks the shot. It works
-against a [gpui-playwright](https://github.com/Ziinc/gpui-playwright) app or
-any web page.
+The same works against a
+[gpui-playwright](https://github.com/Ziinc/gpui-playwright) app or any web
+page:
 
 ```js
-const { expectVisual } = require("gpui-visual-test-playwright");
+const { execFileSync } = require("node:child_process");
 
 test("todo list", async ({ page }) => {
-  await expectVisual(page, "todo/seeded", {
-    expect: ["Two todos are listed, neither checked"],
-    expectIn: { add: "The Add button is enabled" },
-    regions: { add: page.getByRole("button", { name: "Add" }) },
-    diff: 0.001,
-  });
+  await page.screenshot({ path: "todo.png" });
+  const add = await page.getByRole("button", { name: "Add" }).boundingBox();
+  // Throws, after printing the report, unless every check passes.
+  execFileSync("cargo-visual-test", [
+    "check", "todo.png", "--name", "todo/seeded",
+    "-e", "Two todos are listed, neither checked",
+    "--region", `add=${add.x},${add.y},${add.width},${add.height}`,
+    "--expect-in", "add=The Add button is enabled",
+    "--diff", "0.001",
+  ], { stdio: "inherit" });
 });
 ```
 
-Python (`from gpui_visual_test_playwright import expect_visual`) takes the
-same options in snake_case, with `expect_visual_async` for the async API. A
-failure raises `VisualCheckError`, an `AssertionError`.
+In Python:
 
-### Elixir and baguette
-
-[`integrations/elixir`](https://github.com/Ziinc/gpui-visual-test/tree/main/integrations/elixir) (`gpui_visual_test`) checks PNG
-bytes or `{:file, path}` from ExUnit:
-
-```elixir
-import GpuiVisualTest.Assertions
-
-assert_visual png, "counter/initial",
-  expect: ["The count reads 0"],
-  regions: [toolbar: {0, 0, 400, 40}],
-  expect_in: [toolbar: "Save is greyed out"],
-  diff: 0.001
+```python
+page.screenshot(path="todo.png")
+subprocess.run(["cargo-visual-test", "check", "todo.png", "--name", "todo/seeded",
+                "-e", "Two todos are listed, neither checked"], check=True)
 ```
 
-`GpuiVisualTest.check/3` returns `{:ok | :fail | :pending, result}` instead of
-raising.
+### ExUnit and baguette
+
+```elixir
+@tag :tmp_dir
+test "counter starts at zero", %{tmp_dir: dir} do
+  path = Path.join(dir, "counter.png")
+  File.write!(path, png)
+
+  {report, status} =
+    System.cmd("cargo-visual-test", ["check", path, "--name", "counter/initial",
+      "-e", "The count reads 0", "--diff", "0.001"], stderr_to_stdout: true)
+
+  assert status == 0, report
+end
+```
 
 ### A running GPUI app (tauri-gpui)
 
