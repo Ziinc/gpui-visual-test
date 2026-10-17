@@ -22,7 +22,8 @@ confirm by looking. Exit codes everywhere: 0 pass, 1 fail, 2 needs a decision,
    one.
 4. Record each decision with the evidence:
    `cargo visual-test verdict <name> <index> pass --reason "Save button is grey with muted text"`.
-   Use `unsure` only when the image cannot settle it (too small, out of frame),
+   Add `--hash <hash from pending --json>` so the verdict is refused if the
+   image was re-rendered while you looked. Use `unsure` only when the image cannot settle it (too small, out of frame),
    and say why.
 5. `cargo visual-test status` must exit 0. Re-run the tests: unchanged images
    reuse your verdicts.
