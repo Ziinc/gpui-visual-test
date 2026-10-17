@@ -220,6 +220,7 @@ cargo test
   "status": "unsure",
   "image": "/work/target/visual-test/editor/toolbar.png",
   "manifest": "/work/target/visual-test/editor/toolbar.json",
+  "hash": "86008bd6be550bd0",
   "width": 1600, "height": 240, "scale": 2.0,
   "regions": [{ "id": "actions", "x": 600, "y": 0, "width": 200, "height": 40 }],
   "checks": [
@@ -230,7 +231,9 @@ cargo test
 }
 ```
 
-Judge from what is drawn, not from the code. A failing check is a finding to
+Pass the `hash` you looked at with `verdict --hash` when tests may re-render
+while you review; the verdict is refused if the image changed. Judge from
+what is drawn, not from the code. A failing check is a finding to
 report or fix; never flip a verdict to pass without looking at the current
 image. The repository ships this loop as an agent skill in
 [`skills/gpui-visual-test/SKILL.md`](https://github.com/Ziinc/gpui-visual-test/blob/main/skills/gpui-visual-test/SKILL.md).
@@ -241,7 +244,7 @@ image. The repository ships this loop as an agent skill in
 | --- | --- |
 | `check <png> -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--scale n] [--name n] [--judge spec] [--rejudge] [--json]` | Checks any PNG |
 | `pending [--json]` | Lists undecided expectations, the image to look at, and the command to record each |
-| `verdict <name> <index\|all> pass\|fail\|unsure --reason "…" [--judge who]` | Records a decision |
+| `verdict <name> <index\|all> pass\|fail\|unsure --reason "…" [--judge who] [--hash h]` | Records a decision; with `--hash`, refuses if the image changed since you looked |
 | `judge [names…] [--judge spec] [--rejudge]` | Runs a model over stored shots |
 | `status [--json]` | Overall result and counts |
 | `list [--status pass\|fail\|unsure] [--json]` | All shots |
@@ -259,7 +262,8 @@ Each check writes to `$GPUI_VISUAL_DIR`, else `visual-test/` under
 `$CARGO_TARGET_DIR` or the workspace's `target/`. Tests and the CLI resolve
 the same place from anywhere in the workspace.
 
-- `<name>.png`: the shot. A `/` in the name makes subdirectories.
+- `<name>.png`: the shot. A `/` in the name makes subdirectories. Names are
+  relative paths of non-empty segments, without `.`, `..`, `\` or `:`.
 - `<name>.json`: the manifest, which holds the image hash, size, scale,
   regions, attached state, and each expectation with its latest verdict.
 - `index.html`: every shot, failing and pending first.
@@ -272,6 +276,21 @@ when its pixel hash matches, or when it differs from the stored image in at
 most `with_tolerance(share)` of pixels. When every verdict is reused within
 tolerance, the judged image stays the baseline, so small changes cannot drift
 unnoticed. `unsure` verdicts are always asked again.
+
+### Limits
+
+- Parallel tests can share the output directory, but two checks with the
+  same shot name overwrite each other.
+- A manifest that cannot be read makes `list` and `status` fail (exit 3)
+  rather than skipping the shot.
+- Images whose longest edge exceeds 2048 px are downscaled before being sent
+  to a model. Fine detail in a large retina capture can be lost, so clip to
+  the area that matters.
+- Only PNG input is read.
+- `status` passes on an empty directory, so make sure the tests that write
+  shots actually ran.
+- Every check rewrites `index.html` by reading all manifests, which grows
+  with the number of shots.
 
 ### Environment variables
 

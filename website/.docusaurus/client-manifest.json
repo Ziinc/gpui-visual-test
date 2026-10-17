@@ -58,9 +58,9 @@
     "354": {
       "js": [
         {
-          "file": "assets/js/runtime~main.2ff7c957.js",
-          "hash": "8012ddefc42d02c9",
-          "publicPath": "/gpui-visual-test/assets/js/runtime~main.2ff7c957.js"
+          "file": "assets/js/runtime~main.145cdf56.js",
+          "hash": "5d3f92300db5bcd7",
+          "publicPath": "/gpui-visual-test/assets/js/runtime~main.145cdf56.js"
         }
       ]
     },
@@ -76,9 +76,9 @@
     "490": {
       "js": [
         {
-          "file": "assets/js/e7ce6630.cc957118.js",
-          "hash": "21ebf7221dcb831a",
-          "publicPath": "/gpui-visual-test/assets/js/e7ce6630.cc957118.js"
+          "file": "assets/js/e7ce6630.bc9b4077.js",
+          "hash": "60707d19813ce289",
+          "publicPath": "/gpui-visual-test/assets/js/e7ce6630.bc9b4077.js"
         }
       ]
     },
