@@ -95,6 +95,9 @@ impl Shot {
     /// Crops to an area given in logical pixels. Regions are moved into the
     /// cropped space and dropped when they fall outside it.
     pub fn clip(mut self, x: f32, y: f32, width: f32, height: f32) -> Result<Self> {
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) || x < 0. || y < 0. {
+            bail!("clip {x},{y} {width}x{height} must be finite with a non-negative origin");
+        }
         let s = self.scale;
         let (px, py) = ((x * s).round() as u32, (y * s).round() as u32);
         let (pw, ph) = ((width * s).round() as u32, (height * s).round() as u32);
@@ -164,6 +167,32 @@ impl Shot {
             )
             .context("encoding PNG")?;
         Ok(bytes)
+    }
+
+    /// Checks what serialization and judges rely on: a finite positive
+    /// scale, a non-empty image, and finite, non-negative regions.
+    pub fn validate(&self) -> Result<()> {
+        if !(self.scale.is_finite() && self.scale > 0.) {
+            bail!(
+                "`{}` has scale {}; it must be finite and above 0",
+                self.name,
+                self.scale
+            );
+        }
+        if self.image.width() == 0 || self.image.height() == 0 {
+            bail!("`{}` is an empty image", self.name);
+        }
+        for r in &self.regions {
+            let finite = [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite());
+            if !finite || r.width < 0. || r.height < 0. {
+                bail!(
+                    "`{}` region `{}` must have finite numbers and a non-negative size",
+                    self.name,
+                    r.id
+                );
+            }
+        }
+        Ok(())
     }
 
     /// A stable hash of the pixels, used to reuse verdicts for unchanged shots.
