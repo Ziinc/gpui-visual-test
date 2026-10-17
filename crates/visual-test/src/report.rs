@@ -31,12 +31,8 @@ pub fn write_index(store: &Store) -> Result<PathBuf> {
                 escape(&diff.reason),
                 status = diff.status,
             ));
-            if let Some(image) = &diff.image {
-                let dir = std::path::Path::new(&m.name)
-                    .parent()
-                    .map(|p| format!("{}/", p.display()))
-                    .unwrap_or_default();
-                let image = href(&format!("{dir}{image}"));
+            if diff.image.is_some() {
+                let image = href(&format!("{}.diff.png", m.name));
                 html.push_str(&format!(
                     "<a href=\"{image}\"><img src=\"{image}\" alt=\"pixel diff\"></a>"
                 ));

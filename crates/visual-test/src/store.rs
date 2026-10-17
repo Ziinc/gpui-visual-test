@@ -107,14 +107,15 @@ impl Store {
     }
 
     /// `$GPUI_VISUAL_DIR`, else `visual-test/` under `$CARGO_TARGET_DIR` or
-    /// the workspace's `target/`. Tests and the CLI resolve the same place
-    /// from anywhere in the workspace.
+    /// the workspace's `target/`. Relative paths are from the workspace
+    /// root, so tests (run from their crate) and the CLI resolve the same
+    /// place from anywhere in the workspace.
     pub fn default_dir() -> PathBuf {
         if let Some(dir) = std::env::var_os("GPUI_VISUAL_DIR") {
-            return dir.into();
+            return workspace_root().join(dir);
         }
         if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
-            return PathBuf::from(target).join("visual-test");
+            return workspace_root().join(target).join("visual-test");
         }
         workspace_root().join("target").join("visual-test")
     }
@@ -130,19 +131,21 @@ impl Store {
 
     /// Rejects names that would land outside the directory or collide:
     /// empty, absolute, `.`/`..` or empty segments, backslashes, or a
-    /// `.diff` ending (taken by diff images).
+    /// `.diff` ending (taken by diff images), or a leading `-` (read as a
+    /// CLI flag).
     pub fn validate_name(name: &str) -> Result<()> {
         let bad = name.is_empty()
             || name.starts_with('/')
             || name.contains('\\')
             || name.contains(':')
             || name.ends_with(".diff")
+            || name.starts_with('-')
             || name
                 .split('/')
                 .any(|seg| seg.is_empty() || seg == "." || seg == "..");
         if bad {
             anyhow::bail!(
-                "shot name {name:?} must be a relative path of non-empty segments, without `.`, `..`, `\\`, `:` or a `.diff` ending"
+                "shot name {name:?} must be a relative path of non-empty segments, without `.`, `..`, `\\`, `:`, a leading `-` or a `.diff` ending"
             );
         }
         Ok(())
@@ -178,6 +181,11 @@ impl Store {
         let path = self.manifest_path(name);
         let mut manifest = Manifest::load(&path)?;
         let count = manifest.checks.len();
+        if count == 0 {
+            anyhow::bail!(
+                "`{name}` has no expectations to record a verdict for; a pixel diff is accepted with `cargo visual-test approve`"
+            );
+        }
         match index {
             Some(i) if i >= count => {
                 anyhow::bail!("`{name}` has {count} expectations; index {i} is out of range")
@@ -194,10 +202,10 @@ impl Store {
     }
 
     /// Accepts a shot's current image as the baseline its pixel diff
-    /// compares against, and marks the diff layer passed. The baseline goes
-    /// to `baseline_dir`, else where the last diff looked, else the default
-    /// baseline directory.
-    pub fn approve(&self, name: &str, baseline_dir: Option<&Path>) -> Result<Manifest> {
+    /// compares against, marks the diff layer passed, and returns the
+    /// baseline written. It goes to `baseline_dir`, else where the last diff
+    /// looked, else the default baseline directory.
+    pub fn approve(&self, name: &str, baseline_dir: Option<&Path>) -> Result<PathBuf> {
         Self::validate_name(name)?;
         let path = self.manifest_path(name);
         let mut manifest = Manifest::load(&path)?;
@@ -209,13 +217,36 @@ impl Store {
         let image = self.image_path(name);
         let bytes = fs::read(&image).with_context(|| format!("reading {}", image.display()))?;
         write_atomic(&baseline, &bytes)?;
+        let baseline = std::path::absolute(&baseline)?;
         if let Some(diff) = &mut manifest.diff {
-            diff.baseline = std::path::absolute(&baseline)?;
+            // The shot now is the baseline, so nothing differs from it.
+            diff.baseline = baseline.clone();
             diff.status = Status::Pass;
             diff.reason = "approved as the baseline".into();
+            diff.changed = 0.;
+            diff.bounds = None;
+            diff.image = None;
             manifest.save(&path)?;
         }
-        Ok(manifest)
+        match fs::remove_file(self.diff_path(name)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error)?,
+            _ => {}
+        }
+        Ok(baseline)
+    }
+}
+
+/// A shot name as one shell word, quoted only when it needs to be, for
+/// commands printed for people and agents to paste.
+pub fn shell_word(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | '@'));
+    if plain {
+        name.into()
+    } else {
+        format!("'{}'", name.replace('\'', "'\\''"))
     }
 }
 

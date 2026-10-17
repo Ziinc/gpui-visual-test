@@ -29,7 +29,7 @@ pub struct Diff {
     /// Pixels that differ, counting every pixel outside the overlap when the
     /// sizes differ.
     pub changed: u64,
-    /// Pixels compared: the area covering both images.
+    /// Pixels compared: those covered by either image.
     pub total: u64,
     /// The smallest rectangle holding every changed pixel.
     pub bounds: Option<Bounds>,
@@ -60,7 +60,7 @@ pub fn diff(before: &RgbaImage, after: &RgbaImage, threshold: u8) -> Diff {
         before.height().max(after.height()),
     );
     let mut image = RgbaImage::new(width, height);
-    let mut changed = 0;
+    let (mut changed, mut total) = (0, 0);
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
     for (x, y, out) in image.enumerate_pixels_mut() {
         let pixels = (
@@ -69,8 +69,14 @@ pub fn diff(before: &RgbaImage, after: &RgbaImage, threshold: u8) -> Diff {
         );
         let differs = match pixels {
             (Some(a), Some(b)) => differs(a, b, threshold),
+            // Outside both images, as when a wide image becomes a tall one.
+            (None, None) => {
+                *out = Rgba([0; 4]);
+                continue;
+            }
             _ => true,
         };
+        total += 1;
         *out = if differs {
             changed += 1;
             (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
@@ -81,7 +87,7 @@ pub fn diff(before: &RgbaImage, after: &RgbaImage, threshold: u8) -> Diff {
     }
     Diff {
         changed,
-        total: width as u64 * height as u64,
+        total,
         bounds: (changed > 0).then(|| Bounds {
             x: x0,
             y: y0,
@@ -93,7 +99,11 @@ pub fn diff(before: &RgbaImage, after: &RgbaImage, threshold: u8) -> Diff {
     }
 }
 
+/// Two fully transparent pixels are equal whatever colour they hold.
 pub(crate) fn differs(a: &Rgba<u8>, b: &Rgba<u8>, threshold: u8) -> bool {
+    if a.0[3] == 0 && b.0[3] == 0 {
+        return false;
+    }
     a.0.iter()
         .zip(b.0.iter())
         .any(|(a, b)| a.abs_diff(*b) > threshold)
@@ -128,12 +138,14 @@ pub struct BaselineDiff {
 }
 
 /// `$GPUI_VISUAL_BASELINE_DIR`, else `visual-baselines/` at the workspace
-/// root. Unlike the output directory, it belongs in version control.
+/// root; a relative path is from the workspace root too. Unlike the output
+/// directory, it belongs in version control.
 pub fn default_baseline_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("GPUI_VISUAL_BASELINE_DIR") {
-        return dir.into();
+    let root = crate::store::workspace_root();
+    match std::env::var_os("GPUI_VISUAL_BASELINE_DIR") {
+        Some(dir) => root.join(dir),
+        None => root.join("visual-baselines"),
     }
-    crate::store::workspace_root().join("visual-baselines")
 }
 
 #[cfg(test)]
@@ -172,5 +184,15 @@ mod tests {
         assert!(d.resized);
         assert_eq!((d.changed, d.total), (8, 24));
         assert_eq!(d.image.dimensions(), (4, 6));
+
+        let wide = diff(&RgbaImage::new(10, 1), &RgbaImage::new(1, 10), 0);
+        assert_eq!((wide.changed, wide.total), (18, 19));
+    }
+
+    #[test]
+    fn transparent_pixels_are_equal_whatever_their_colour() {
+        let white = RgbaImage::from_pixel(2, 2, Rgba([255, 255, 255, 0]));
+        let black = RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 0]));
+        assert!(diff(&white, &black, 0).is_identical());
     }
 }

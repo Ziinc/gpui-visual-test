@@ -5,7 +5,7 @@ use crate::{
     BaselineDiff, Entry, Expectation, Judge, Manifest, Severity, Shot, Status, Store, Verdict,
     diff::{DEFAULT_THRESHOLD, default_baseline_dir, diff},
     shot::difference,
-    store::{MANIFEST_VERSION, write_atomic},
+    store::{MANIFEST_VERSION, shell_word, write_atomic},
 };
 use anyhow::{Context as _, Result, bail};
 use std::{fmt, path::PathBuf};
@@ -108,6 +108,9 @@ impl Check {
         {
             bail!("pixel diff max {max} must be between 0 and 1");
         }
+        if !(0. ..=1.).contains(&self.tolerance) {
+            bail!("tolerance {} must be between 0 and 1", self.tolerance);
+        }
         if self.expectations.is_empty() && self.max_diff.is_none() {
             bail!(
                 "`{}` has no expectations: list what a viewer should be able to confirm by looking at it",
@@ -147,7 +150,9 @@ impl Check {
                 && (previous.hash == hash
                     || (self.tolerance > 0.
                         && image::open(&image_path).is_ok_and(|old| {
-                            difference(&old.to_rgba8(), self.shot.image()) <= self.tolerance
+                            let old = old.to_rgba8();
+                            old.dimensions() == self.shot.image().dimensions()
+                                && difference(&old, self.shot.image()) <= self.tolerance
                         })))
         });
 
@@ -175,6 +180,16 @@ impl Check {
             })
             .collect();
 
+        // The diff is cheap and local, so a broken baseline fails before any
+        // model is paid for.
+        let diff = self
+            .max_diff
+            .map(|max| self.compare(&name, max))
+            .transpose()?;
+        if diff.is_none() {
+            remove_stale(&self.store.diff_path(&name))?;
+        }
+
         let missing: Vec<usize> = (0..verdicts.len())
             .filter(|&i| verdicts[i].is_none())
             .collect();
@@ -200,17 +215,20 @@ impl Check {
             }
         }
 
-        let diff = self
-            .max_diff
-            .map(|max| self.compare(&name, max))
-            .transpose()?;
-
         // When every verdict was reused within tolerance, keep the judged
         // image so small changes cannot drift unnoticed. A pixel diff guards
         // against drift itself, so with one the new image is always kept.
         let keep_baseline =
             diff.is_none() && judged == 0 && previous.as_ref().is_some_and(|p| p.hash != hash);
-        let (width, height) = self.shot.image().dimensions();
+        // The manifest describes the stored image, which is the old one when
+        // it is kept.
+        let (width, height, scale) = match previous.as_ref().filter(|_| keep_baseline) {
+            Some(p) => (p.width, p.height, p.scale),
+            None => {
+                let (w, h) = self.shot.image().dimensions();
+                (w, h, self.shot.scale())
+            }
+        };
         let manifest = Manifest {
             version: MANIFEST_VERSION,
             name: name.clone(),
@@ -225,7 +243,7 @@ impl Check {
             },
             width,
             height,
-            scale: self.shot.scale(),
+            scale,
             regions: self.shot.regions().to_vec(),
             state: self.shot.state().cloned(),
             checks: self
@@ -281,19 +299,36 @@ impl Check {
             } else {
                 layer.status = Status::Unsure;
                 layer.reason = format!(
-                    "no baseline yet; look at the image, then approve it with `cargo visual-test approve {name}`"
+                    "no baseline yet; look at the image, then approve it with `cargo visual-test approve {}`",
+                    shell_word(name)
                 );
             }
             remove_stale(&diff_path)?;
             return Ok(layer);
         }
-        let before = image::open(&baseline)
-            .with_context(|| format!("reading baseline {}", baseline.display()))?
-            .to_rgba8();
+        let before = match read_png(&baseline) {
+            Ok(before) => before,
+            // An unreadable baseline (a Git LFS pointer, a truncated file) is
+            // a failed layer the update flow can repair, not a hard error.
+            Err(_) if self.update_baseline => {
+                write_atomic(&baseline, &self.shot.png()?)?;
+                layer.reason = "baseline replaced: the old one could not be read".into();
+                remove_stale(&diff_path)?;
+                return Ok(layer);
+            }
+            Err(error) => {
+                layer.status = Status::Fail;
+                layer.reason = format!(
+                    "the baseline could not be read ({error:#}); approve this shot to replace it"
+                );
+                remove_stale(&diff_path)?;
+                return Ok(layer);
+            }
+        };
         let d = diff(&before, self.shot.image(), self.threshold);
         layer.changed = d.ratio();
         layer.bounds = d.bounds;
-        let percent = |r: f64| format!("{:.2}%", r * 100.);
+        let percent = |r: f64| format!("{:.3}%", r * 100.);
         layer.reason = match d.bounds {
             None => "identical to the baseline".into(),
             Some(b) => {
@@ -309,7 +344,9 @@ impl Check {
                     String::new()
                 };
                 format!(
-                    "{} of pixels changed (max {}), within {},{} {}x{} px{resized}",
+                    "{} of {} pixels changed ({}, max {}), within {},{} {}x{} px{resized}",
+                    d.changed,
+                    d.total,
                     percent(layer.changed),
                     percent(max),
                     b.x,
@@ -424,6 +461,7 @@ impl Outcome {
 impl fmt::Display for Outcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = &self.manifest.name;
+        let word = shell_word(name);
         writeln!(f, "visual check `{name}`: {}", self.image.display())?;
         if let Some(diff) = &self.manifest.diff {
             writeln!(
@@ -440,7 +478,7 @@ impl fmt::Display for Outcome {
             if diff.status == Status::Fail {
                 writeln!(
                     f,
-                    "        if the change is intended, accept it with\n          cargo visual-test approve {name}\n        or rerun with GPUI_VISUAL_UPDATE=1."
+                    "        if the change is intended, accept it with\n          cargo visual-test approve {word}\n        or rerun with GPUI_VISUAL_UPDATE=1 (`check --update-baseline` in the CLI)."
                 )?;
             }
         }
@@ -462,12 +500,20 @@ impl fmt::Display for Outcome {
             writeln!(
                 f,
                 "{pending} expectation(s) need a decision. Look at the image, then record each with\n  \
-                 cargo visual-test verdict {name} <index> pass|fail --reason \"...\"\n\
+                 cargo visual-test verdict {word} <index> pass|fail --reason \"...\"\n\
                  or set GPUI_VISUAL_JUDGE to a model judge (openai:<model>, anthropic:<model>, jev:<model>+<vision judge>)."
             )?;
         }
         Ok(())
     }
+}
+
+/// Decodes by content, not extension, so a mislabelled file still reads.
+fn read_png(path: &std::path::Path) -> Result<image::RgbaImage> {
+    Ok(image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .decode()?
+        .to_rgba8())
 }
 
 fn mark(status: Status) -> &'static str {
@@ -488,7 +534,12 @@ fn remove_stale(path: &std::path::Path) -> Result<()> {
 }
 
 fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0" && v != "false")
+    std::env::var(name).is_ok_and(|v| is_on(&v))
+}
+
+fn is_on(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
 }
 
 #[cfg(test)]
@@ -680,5 +731,15 @@ mod tests {
 
         let resized = Shot::new("panel/save", RgbaImage::new(8, 9), 1.);
         assert_eq!(check(resized, 1., false).diff_status(), Some(Status::Fail));
+    }
+
+    #[test]
+    fn env_flags_read_common_spellings_of_off() {
+        for off in ["", "0", "false", "FALSE", "no", "Off", " no "] {
+            assert!(!is_on(off), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "on"] {
+            assert!(is_on(on), "{on:?}");
+        }
     }
 }

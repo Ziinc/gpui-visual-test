@@ -188,7 +188,14 @@ impl Shot {
         if self.image.width() == 0 || self.image.height() == 0 {
             bail!("`{}` is an empty image", self.name);
         }
-        for r in &self.regions {
+        for (i, r) in self.regions.iter().enumerate() {
+            if r.id.is_empty() || self.regions[..i].iter().any(|o| o.id == r.id) {
+                bail!(
+                    "`{}` region ids must be non-empty and unique; `{}` is not",
+                    self.name,
+                    r.id
+                );
+            }
             let finite = [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite());
             if !finite || r.width < 0. || r.height < 0. {
                 bail!(
