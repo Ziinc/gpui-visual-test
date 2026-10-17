@@ -101,7 +101,13 @@ impl Shot {
         let s = self.scale;
         let (px, py) = ((x * s).round() as u32, (y * s).round() as u32);
         let (pw, ph) = ((width * s).round() as u32, (height * s).round() as u32);
-        if pw == 0 || ph == 0 || px + pw > self.image.width() || py + ph > self.image.height() {
+        let fits =
+            |start: u32, len: u32, max: u32| start.checked_add(len).is_some_and(|end| end <= max);
+        if pw == 0
+            || ph == 0
+            || !fits(px, pw, self.image.width())
+            || !fits(py, ph, self.image.height())
+        {
             bail!(
                 "clip {x},{y} {width}x{height} is outside the {}x{} shot",
                 self.image.width() as f32 / s,

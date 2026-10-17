@@ -57,7 +57,16 @@ impl Manifest {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let manifest: Self =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if manifest.version > MANIFEST_VERSION {
+            anyhow::bail!(
+                "{} is manifest version {}; this gpui-visual-test reads up to {MANIFEST_VERSION}, so upgrade it",
+                path.display(),
+                manifest.version
+            );
+        }
+        Ok(manifest)
     }
 
     /// Writes atomically, so parallel tests and the CLI never see half a file.

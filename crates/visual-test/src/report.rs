@@ -23,7 +23,7 @@ pub fn write_index(store: &Store) -> Result<PathBuf> {
             "<section><h2 class={status}>{name} <small>{status}</small></h2><a href=\"{image}\"><img src=\"{image}\" alt=\"{name}\"></a>",
             status = m.status(),
             name = escape(&m.name),
-            image = escape(&image),
+            image = href(&image),
         ));
         if let Some(diff) = &m.diff {
             html.push_str(&format!(
@@ -36,7 +36,7 @@ pub fn write_index(store: &Store) -> Result<PathBuf> {
                     .parent()
                     .map(|p| format!("{}/", p.display()))
                     .unwrap_or_default();
-                let image = escape(&format!("{dir}{image}"));
+                let image = href(&format!("{dir}{image}"));
                 html.push_str(&format!(
                     "<a href=\"{image}\"><img src=\"{image}\" alt=\"pixel diff\"></a>"
                 ));
@@ -73,9 +73,31 @@ fn rank(status: Status) -> u8 {
     }
 }
 
+/// A relative link to a file: each byte outside the URL-safe set is
+/// percent-encoded, so names with `#`, `?`, `%` or spaces still resolve.
+fn href(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hrefs_encode_url_syntax() {
+        assert_eq!(super::href("a b/c#1?.png"), "a%20b/c%231%3F.png");
+        assert_eq!(super::href("ui/é.png"), "ui/%C3%A9.png");
+    }
 }

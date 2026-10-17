@@ -100,6 +100,13 @@ impl<A: Judge, B: Judge> Judge for Cascade<A, B> {
 
     fn judge(&self, shot: &Shot, expectations: &[Expectation]) -> Result<Vec<Verdict>> {
         let mut verdicts = self.first.judge(shot, expectations)?;
+        anyhow::ensure!(
+            verdicts.len() == expectations.len(),
+            "{} returned {} verdicts for {} expectations",
+            self.first.id(),
+            verdicts.len(),
+            expectations.len()
+        );
         let unsure: Vec<usize> = (0..verdicts.len())
             .filter(|&i| verdicts[i].status == Status::Unsure)
             .collect();

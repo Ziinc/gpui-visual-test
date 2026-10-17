@@ -153,7 +153,16 @@ fn main() -> ExitCode {
         .enumerate()
         .filter(|(i, a)| !(*i == 1 && a == "visual-test"))
         .map(|(_, a)| a);
-    let cli = Cli::parse_from(args);
+    // Usage errors exit 3 like any other error: clap's own 2 would read as
+    // "pending" to an agent.
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) if !error.use_stderr() => error.exit(),
+        Err(error) => {
+            let _ = error.print();
+            return ExitCode::from(3);
+        }
+    };
     match run(cli) {
         Ok(code) => code,
         Err(error) => {
@@ -357,8 +366,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .into_iter()
                 .filter(|m| names.is_empty() || names.contains(&m.name))
                 .collect();
+            if let Some(missing) = names
+                .iter()
+                .find(|n| !manifests.iter().any(|m| &m.name == *n))
+            {
+                bail!("no shot `{missing}` in {}", store.dir().display());
+            }
             if manifests.is_empty() {
-                bail!("no matching shots in {}", store.dir().display());
+                bail!("no shots in {}", store.dir().display());
             }
             let mut statuses = Vec::new();
             for m in manifests {

@@ -17,7 +17,7 @@ pub enum Provider {
 }
 
 /// A vision model and how to call it.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VisionModel {
     /// The spec prefix (`openai`, `gemini`, `local`, `anthropic`), for ids.
     pub vendor: String,
@@ -25,6 +25,19 @@ pub struct VisionModel {
     pub provider: Provider,
     pub base_url: String,
     pub api_key: Option<String>,
+}
+
+/// Leaves the API key out, so a logged or panicking judge never prints it.
+impl std::fmt::Debug for VisionModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VisionModel")
+            .field("vendor", &self.vendor)
+            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 const DESCRIBE: &str = "Describe this desktop UI screenshot as a JSON object, literally and \

@@ -116,6 +116,22 @@ impl Check {
         }
         Store::validate_name(self.shot.name())?;
         self.shot.validate()?;
+        for expectation in &self.expectations {
+            if let Some(region) = &expectation.region
+                && !self.shot.regions().iter().any(|r| &r.id == region)
+            {
+                bail!(
+                    "`{}` expects region `{region}`, but the shot has no such region (has: {})",
+                    self.shot.name(),
+                    self.shot
+                        .regions()
+                        .iter()
+                        .map(|r| r.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
         let name = self.shot.name().to_string();
         let manifest_path = self.store.manifest_path(&name);
         let image_path = self.store.image_path(&name);
@@ -125,16 +141,18 @@ impl Check {
             .exists()
             .then(|| Manifest::load(&manifest_path))
             .transpose()?;
+        // A region that moved changes what an expectation in it asks about.
         let unchanged = previous.as_ref().is_some_and(|previous| {
-            previous.hash == hash
-                || (self.tolerance > 0.
-                    && image::open(&image_path).is_ok_and(|old| {
-                        difference(&old.to_rgba8(), self.shot.image()) <= self.tolerance
-                    }))
+            previous.regions == self.shot.regions()
+                && (previous.hash == hash
+                    || (self.tolerance > 0.
+                        && image::open(&image_path).is_ok_and(|old| {
+                            difference(&old.to_rgba8(), self.shot.image()) <= self.tolerance
+                        })))
         });
 
-        // Match earlier verdicts by text and occurrence, so two identical
-        // expectations keep their own verdicts.
+        // Match earlier verdicts by text, region and occurrence, so two
+        // identical expectations keep their own verdicts.
         let mut verdicts: Vec<Option<Verdict>> = self
             .expectations
             .iter()
@@ -143,15 +161,14 @@ impl Check {
                 if self.rejudge || !unchanged {
                     return None;
                 }
-                let nth = self.expectations[..i]
-                    .iter()
-                    .filter(|e| e.text == expectation.text)
-                    .count();
+                let same =
+                    |e: &Expectation| e.text == expectation.text && e.region == expectation.region;
+                let nth = self.expectations[..i].iter().filter(|e| same(e)).count();
                 previous
                     .as_ref()?
                     .checks
                     .iter()
-                    .filter(|entry| entry.expectation.text == expectation.text)
+                    .filter(|entry| same(&entry.expectation))
                     .nth(nth)
                     .and_then(|entry| entry.verdict.clone())
                     .filter(|verdict| verdict.status != Status::Unsure)
