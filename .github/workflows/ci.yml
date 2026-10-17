@@ -24,3 +24,18 @@ jobs:
       - run: cargo test --workspace --features gpui-visual-test/judges
       - name: Headless capture on lavapipe
         run: cargo test -p gpui-visual-test --features capture --test capture
+
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm run build

@@ -13,8 +13,14 @@ by looking at it, and let a judge decide:
   answers each expectation with a probability, and only what Jev is unsure of
   goes back to the vision model.
 
+The [documentation site](website/) (`cd website && npm install && npm start`) covers everything on one page.
+
 Verdicts are stored next to each image and reused while the image is
 unchanged, so a model is called (or an agent asked) only when a shot changes.
+
+An optional [pixel diff](#pixel-diff) layer compares each shot with an
+approved baseline, to catch any before/after change the expectations do not
+mention.
 
 ## In a test
 
@@ -56,6 +62,26 @@ Each check writes `<name>.png` and `<name>.json` to `target/visual-test/`
 (override with `GPUI_VISUAL_DIR`) and refreshes `index.html` there, failing
 and pending shots first.
 
+## Pixel diff
+
+```rust
+shot.expect(["No toolbar label is truncated"])
+    .with_diff(0.001) // fail when more than 0.1% of pixels changed
+    .assert_env();
+```
+
+`with_diff(max)` compares the shot with its approved baseline,
+`visual-baselines/<name>.png` at the workspace root (override with
+`with_baseline_dir` or `GPUI_VISUAL_BASELINE_DIR`); commit that directory.
+A pixel counts as changed when any channel differs by more than 8 of 255
+(`with_diff_threshold`). A size change always fails. On a change it writes
+`<name>.diff.png`, the new shot faded with changed pixels in magenta, and
+names the changed area. With no baseline yet the layer is pending.
+
+Accept an intended change with `cargo visual-test approve <name>` (or
+`--all`), or rerun with `GPUI_VISUAL_UPDATE=1`. With a diff layer, a check
+needs no expectations.
+
 ## Judges
 
 Set `GPUI_VISUAL_JUDGE` (tests) or `--judge` (CLI):
@@ -74,7 +100,8 @@ tool call on Anthropic); an answer outside it is an error, never a silent pass.
 Jev's `p(true)` passes at 0.9 or above and fails at 0.1 or below.
 
 Other knobs: `GPUI_VISUAL_REJUDGE=1` ignores stored verdicts;
-`GPUI_VISUAL_UNSURE=warn` lets undecided expectations pass with a warning.
+`GPUI_VISUAL_UNSURE=warn` lets undecided expectations (and missing
+baselines) pass with a warning.
 
 ## The CLI, for agents and people
 
@@ -84,7 +111,9 @@ cargo install --path crates/cli   # provides `cargo visual-test`
 
 | Command | Does | Exit |
 | --- | --- | --- |
-| `cargo visual-test check shot.png -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--judge spec]` | Checks any PNG | 0 pass, 1 fail, 2 pending |
+| `cargo visual-test check shot.png -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--judge spec] [--diff max]` | Checks any PNG, against expectations, its baseline, or both | 0 pass, 1 fail, 2 pending |
+| `cargo visual-test diff before.png after.png [--out diff.png] [--max share] [--json]` | Pixel-diffs two PNGs | 0 within `--max`, 1 otherwise |
+| `cargo visual-test approve <name…\|--all>` | Accepts the current images as pixel-diff baselines | 0 |
 | `cargo visual-test pending [--json]` | Lists undecided expectations, the absolute image path, and the command to record each | 2 if any |
 | `cargo visual-test verdict <name> <index\|all> pass\|fail --reason "…"` | Records a decision after looking at the image | 0 |
 | `cargo visual-test judge [names…] --judge spec [--rejudge]` | Runs a model over stored shots | 0/1/2 |

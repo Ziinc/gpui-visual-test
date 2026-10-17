@@ -1,0 +1,398 @@
+---
+title: gpui-visual-test
+description: Visual tests for GPUI judged in plain English by an agent, a vision model, or TypeSafe Jev.
+hide_table_of_contents: false
+---
+
+# gpui-visual-test
+
+<p className="hero-lead">
+  Render a GPUI view headlessly, or load any PNG. List what a viewer should be
+  able to confirm by looking at it. Let an agent, a vision model, or TypeSafe
+  Jev decide.
+</p>
+
+```rust
+shot.expect([
+    "The Save button is greyed out",
+    "No toolbar label is truncated",
+])
+.assert_env();
+```
+
+<div className="pipeline">
+  <span>GPUI view or PNG</span><b>→</b>
+  <span>Shot</span><b>→</b>
+  <span>Expectations</span><b>→</b>
+  <span>Judge</span><b>→</b>
+  <span><code>name.png</code> + <code>name.json</code> + <code>index.html</code></span>
+</div>
+
+Pixel baselines alone break on every font or anti-aliasing change, and human
+review does not scale. gpui-visual-test checks claims about what is drawn.
+Every verdict is stored next to its image and reused while the image is
+unchanged, so a model is called, or an agent asked, only when a shot actually
+changes. An optional [pixel diff](#pixel-diff) layer adds a strict
+before/after comparison against an approved baseline.
+
+## Quick start
+
+```toml title="Cargo.toml"
+[dev-dependencies.gpui-visual-test]
+git = "https://github.com/Ziinc/gpui-visual-test"
+features = ["capture", "judges"]
+```
+
+| Feature | Adds |
+| --- | --- |
+| `capture` | Headless rendering of GPUI windows into shots |
+| `judges` | Model judges over HTTP: OpenAI-compatible, Anthropic, Jev |
+
+With neither feature the crate still checks PNGs and works with the `agent`
+judge.
+
+### Check a GPUI view
+
+```rust title="tests/toolbar.rs"
+use gpui::AppContext as _;
+use gpui_visual_test::{Expectation, capture};
+
+#[test]
+fn toolbar() {
+    let mut cx = capture::headless_app(None).unwrap();
+    cx.update(|cx| gpui_kit::init(cx));
+
+    let shot = capture::render_view(&mut cx, "editor/toolbar", 800., 120., |window, cx| {
+        cx.new(|cx| Toolbar::new(window, cx))
+    })
+    .unwrap()
+    .with_region("actions", 600., 0., 200., 40.);
+
+    shot.expect([
+        Expectation::new("The Save button is greyed out").in_region("actions"),
+        Expectation::new("No toolbar label is truncated"),
+        Expectation::new("Icons are vertically centred").should(),
+    ])
+    .assert_env();
+}
+```
+
+`render_view` opens a hidden window, draws it until layout settles, captures
+it and closes it. For a window opened another way, such as
+`gpui_kit::open_window` (which wraps content in its Root), open it inside
+`cx.update` and call `capture::capture_window(&mut cx, handle.into(), "name")`.
+
+`assert_env` reads the judge from `GPUI_VISUAL_JUDGE` and defaults to
+`agent`. It panics with a readable report unless every `Must` expectation
+passed. Use `.run(&judge)` to get the `Outcome` without panicking.
+
+### Check any PNG
+
+```rust
+use gpui_visual_test::{Shot, judge::AgentJudge};
+
+let outcome = Shot::open("screenshots/export-dialog.png")?
+    .expect(["The dialog title reads Export"])
+    .run(&AgentJudge)?;
+```
+
+Or from the shell:
+
+```bash
+cargo visual-test check export-dialog.png \
+  -e "The dialog title reads Export" \
+  -e "No text overlaps the buttons" \
+  --region footer=0,520,800,80
+```
+
+### Writing expectations
+
+Write what a person could confirm by looking at the image, one claim each.
+
+| Good | Avoid |
+| --- | --- |
+| "The Save button is greyed out" | "Save is disabled" (behaviour, not visible) |
+| "The error banner is red and reads 'Network error'" | "Errors are handled" |
+| "No toolbar label is truncated" | "The toolbar looks good" |
+
+- `Expectation::in_region(id)` points a claim at a named region from
+  `Shot::with_region(id, x, y, width, height)`, in logical pixels.
+- `Expectation::should()` reports a failure without failing the check.
+- `Shot::with_state(json)` attaches non-visual state, such as an element tree,
+  for text judges like Jev to read.
+- `Shot::clip(x, y, width, height)` crops to an area before judging.
+
+## Pixel diff
+
+Expectations catch what you thought to write down. A pixel diff catches
+everything else: any change from an approved baseline.
+
+```rust
+shot.expect(["No toolbar label is truncated"])
+    // Fail when more than 0.1% of pixels changed
+    .with_diff(0.001)
+    .assert_env();
+```
+
+| Builder | Default |
+| --- | --- |
+| `with_diff(max)` | Off. The share of pixels (0 to 1) allowed to change. |
+| `with_baseline_dir(dir)` | `$GPUI_VISUAL_BASELINE_DIR`, else `visual-baselines/` at the workspace root |
+| `with_diff_threshold(n)` | `8`: a pixel changed when any channel differs by more than this |
+| `update_baseline(bool)` | `GPUI_VISUAL_UPDATE=1`: accept the shot as the new baseline |
+
+- Baselines are `<baseline dir>/<name>.png`. Commit them; the output
+  directory is scratch.
+- No baseline yet: the layer is pending (exit 2) until approved.
+- More than `max` changed, or a different size: the layer fails and writes
+  `<name>.diff.png`, the shot faded with changes in magenta. The reason names
+  the share and the changed area.
+- With a diff layer a check needs no expectations, so it can be a plain
+  before/after test.
+
+Accept an intended change:
+
+```bash
+cargo visual-test approve editor/toolbar
+# or every failing and missing baseline
+cargo visual-test approve --all
+```
+
+Compare any two images:
+
+```bash
+cargo visual-test diff before.png after.png \
+  --out diff.png --max 0.001
+```
+
+## Judges
+
+Pick a judge with `GPUI_VISUAL_JUDGE` in tests, or `--judge` on the CLI.
+
+| Spec | Who decides | Needs |
+| --- | --- | --- |
+| `agent` (default) | An agent or person, through the CLI | Nothing |
+| `openai:<model>`, e.g. `openai:gpt-6-astra` | OpenAI vision model | `OPENAI_API_KEY` (`OPENAI_BASE_URL` to override) |
+| `gemini:<model>` | Gemini, through its OpenAI-compatible API | `GEMINI_API_KEY` |
+| `anthropic:<model>`, e.g. `anthropic:claude-opus-5-5` | Anthropic vision model | `ANTHROPIC_API_KEY` |
+| `local:<model>`, e.g. `local:qwen3-vl:8b` | Any OpenAI-compatible server (Ollama, vLLM) | Server at `GPUI_VISUAL_LOCAL_URL`, default `http://localhost:11434/v1` |
+| `jev:<model>+<vision spec>`, e.g. `jev:jev-1.13.0+openai:gpt-6-astra` | TypeSafe Jev, backed by a vision model | `TYPESAFE_API_KEY` plus the vision model's key |
+
+Model judges must answer in a fixed JSON schema: Structured Outputs on
+OpenAI-compatible APIs, a forced tool call on Anthropic. An answer outside the
+schema is an error, never a silent pass. Each verdict is `pass`, `fail` or
+`unsure`, with a one-sentence reason and a confidence.
+
+### Jev, the fast judge
+
+[Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) is
+TypeSafe AI's "System One" model. It answers typed questions with calibrated
+probabilities in one pass, but it reads text, not images. So the `jev:` judge
+works in three steps:
+
+1. The vision model describes the shot once as JSON: visible text, controls
+   and their state, layout, theme, and defects such as clipped or overlapping
+   elements.
+2. Jev answers each expectation as a yes/no question over that description,
+   plus the shot's regions and attached state.
+3. `p(true) ≥ 0.9` passes, `p(true) ≤ 0.1` fails, and anything between goes
+   back to the vision model for a full judgement.
+
+Adding or rewording an expectation only re-asks Jev; the vision call happens
+once per changed image.
+
+### Your own judge
+
+```rust
+use gpui_visual_test::{Status, Verdict, judge::{Cascade, FnJudge, Judge}};
+
+let rules = FnJudge::new("rules", |shot, expectations| {
+    Ok(expectations
+        .iter()
+        .map(|_| Verdict::new(Status::Unsure, "no rule matched", "rules"))
+        .collect())
+});
+// Ask `rules` first; send what it is unsure of to a model.
+let judge = Cascade { first: rules, then: gpui_visual_test::judge::from_spec("openai:gpt-6-astra")? };
+```
+
+Implement `Judge` (`id` and `judge`) for anything else. It returns one
+`Verdict` per expectation, in order.
+
+## Agents and the CLI {#agents}
+
+`cargo visual-test` is built for coding agents as much as for people. Every
+listing has `--json`, image paths are absolute, and exit codes say what
+happened.
+
+```bash
+cargo install --git https://github.com/Ziinc/gpui-visual-test cargo-visual-test
+```
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Every `Must` expectation passed |
+| 1 | At least one failed |
+| 2 | At least one needs a decision |
+| 3 | The command itself failed |
+
+### The review loop
+
+With the default `agent` judge, a test run stops with expectations pending.
+An agent, or a person, then reviews them:
+
+```bash
+# Writes target/visual-test/*.png and *.json
+cargo test
+# What needs a decision, and where each image is
+cargo visual-test pending --json
+# Look at each image, then record each decision with its evidence
+cargo visual-test verdict editor/toolbar 0 pass \
+  --reason "Save is grey with muted text"
+cargo visual-test verdict editor/toolbar 1 fail \
+  --reason "'Format document' is cut to 'Format docu…'"
+# 0 when everything passes
+cargo visual-test status
+# Unchanged images reuse the recorded verdicts
+cargo test
+```
+
+`pending --json` returns one object per shot:
+
+```json
+{
+  "name": "editor/toolbar",
+  "status": "unsure",
+  "image": "/work/target/visual-test/editor/toolbar.png",
+  "manifest": "/work/target/visual-test/editor/toolbar.json",
+  "hash": "86008bd6be550bd0",
+  "width": 1600, "height": 240, "scale": 2.0,
+  "regions": [{ "id": "actions", "x": 600, "y": 0, "width": 200, "height": 40 }],
+  "checks": [
+    { "index": 0, "text": "The Save button is greyed out", "region": "actions",
+      "severity": "must", "status": "unsure",
+      "verdict": { "status": "unsure", "reason": "awaiting review", "judge": "agent" } }
+  ]
+}
+```
+
+A shot with a pixel diff layer also carries `"diff"`: its `status`,
+`reason`, `changed`, `bounds`, `baseline` path and diff `image` path.
+Approve a changed baseline only when the change is what the task intended.
+
+Pass the `hash` you looked at with `verdict --hash` when tests may re-render
+while you review; the verdict is refused if the image changed. Judge from
+what is drawn, not from the code. A failing check is a finding to
+report or fix; never flip a verdict to pass without looking at the current
+image. The repository ships this loop as an agent skill in
+[`skills/gpui-visual-test/SKILL.md`](https://github.com/Ziinc/gpui-visual-test/blob/main/skills/gpui-visual-test/SKILL.md).
+
+### Commands
+
+| Command | Does |
+| --- | --- |
+| `check <png> -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--scale n] [--name n] [--judge spec] [--rejudge] [--diff max] [--baseline-dir d] [--update-baseline] [--json]` | Checks any PNG against expectations, its baseline, or both |
+| `diff <before> <after> [--out png] [--max share] [--threshold n] [--json]` | Pixel-diffs two PNGs; exits 1 past `--max` or on a size change |
+| `approve <name…\|--all> [--baseline-dir d]` | Accepts current images as pixel-diff baselines |
+| `pending [--json]` | Lists undecided expectations, the image to look at, and the command to record each |
+| `verdict <name> <index\|all> pass\|fail\|unsure --reason "…" [--judge who] [--hash h]` | Records a decision; with `--hash`, refuses if the image changed since you looked |
+| `judge [names…] [--judge spec] [--rejudge]` | Runs a model over stored shots |
+| `status [--json]` | Overall result and counts |
+| `list [--status pass\|fail\|unsure] [--json]` | All shots |
+| `show <name> [--json]` | One shot in full |
+| `report` | Rewrites `index.html` and prints its path |
+
+All commands take `--dir` to point at an output directory other than the
+default.
+
+## Reference
+
+### Output directory
+
+Each check writes to `$GPUI_VISUAL_DIR`, else `visual-test/` under
+`$CARGO_TARGET_DIR` or the workspace's `target/`. Tests and the CLI resolve
+the same place from anywhere in the workspace.
+
+- `<name>.png`: the shot. A `/` in the name makes subdirectories. Names are
+  relative paths of non-empty segments, without `.`, `..`, `\` or `:`,
+  and not ending in `.diff`.
+- `<name>.json`: the manifest, which holds the image hash, size, scale,
+  regions, attached state, and each expectation with its latest verdict.
+- `<name>.diff.png`: the pixel diff, when the shot changed from its
+  baseline.
+- `index.html`: every shot, failing and pending first.
+
+### When verdicts are reused
+
+A stored verdict is reused when its expectation text matches, its status is
+`pass` or `fail`, and the image is unchanged. The image counts as unchanged
+when its pixel hash matches, or when it differs from the stored image in at
+most `with_tolerance(share)` of pixels. When every verdict is reused within
+tolerance, the judged image stays the baseline, so small changes cannot drift
+unnoticed. `unsure` verdicts are always asked again.
+
+### Limits
+
+- Parallel tests can share the output directory, but two checks with the
+  same shot name overwrite each other.
+- A manifest that cannot be read makes `list` and `status` fail (exit 3)
+  rather than skipping the shot.
+- Images whose longest edge exceeds 2048 px are downscaled before being sent
+  to a model. Fine detail in a large retina capture can be lost, so clip to
+  the area that matters.
+- Only PNG input is read.
+- The pixel diff compares exact channels within a threshold. It has no
+  anti-aliasing detection, so a baseline from one renderer (lavapipe on CI)
+  may not match another (Metal locally); keep baselines from the platform
+  that checks them.
+- `status` passes on an empty directory, so make sure the tests that write
+  shots actually ran.
+- Every check rewrites `index.html` by reading all manifests, which grows
+  with the number of shots.
+
+### Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `GPUI_VISUAL_JUDGE` | Judge spec for `assert_env` and the CLI (default `agent`) |
+| `GPUI_VISUAL_DIR` | Output directory |
+| `GPUI_VISUAL_REJUDGE=1` | Ignore stored verdicts and judge everything again |
+| `GPUI_VISUAL_UNSURE=warn` | Let undecided expectations and missing baselines pass with a warning |
+| `GPUI_VISUAL_BASELINE_DIR` | Pixel-diff baselines |
+| `GPUI_VISUAL_UPDATE=1` | Accept every diffed shot as its new baseline |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | OpenAI judge |
+| `GEMINI_API_KEY`, `GEMINI_BASE_URL` | Gemini judge |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | Anthropic judge |
+| `GPUI_VISUAL_LOCAL_URL`, `GPUI_VISUAL_LOCAL_KEY` | Local OpenAI-compatible judge |
+| `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL` | Jev |
+
+Requests honour `HTTPS_PROXY`. Loopback hosts and hosts in `NO_PROXY` are
+reached directly, so a local model server keeps working behind a proxy.
+
+### Headless rendering
+
+`capture` uses GPUI's offscreen renderer: Metal on macOS and Vulkan on Linux.
+On Linux CI without a GPU, install lavapipe:
+
+```bash
+sudo apt-get install -y mesa-vulkan-drivers libvulkan-dev libxkbcommon-dev \
+  libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev
+```
+
+The crate pins `gpui-pre =0.3.9`, the snapshot that gpui-kit 0.7.3 and
+gpui-styleguidist build against. Use the same snapshot in your app.
+
+### API at a glance
+
+| Item | Purpose |
+| --- | --- |
+| `Shot` | The image being judged: `new`, `from_png`, `open`, `with_name`, `with_region`, `with_state`, `clip`, `expect` |
+| `Expectation` | One plain-English claim: `new`, `in_region`, `should` |
+| `Check` | A shot and its expectations: `with_dir`, `with_tolerance`, `rejudge`, `allow_unsure`, `run`, `assert`, `assert_env` |
+| `Outcome` | The verdicts of one check: `failures`, `unsure`, `is_ok`, and a readable `Display` |
+| `Verdict`, `Status` | `pass`, `fail` or `unsure`, with reason, confidence and judge |
+| `Judge` | The trait every judge implements |
+| `judge::{AgentJudge, FnJudge, Cascade, from_spec, from_env}` | Built-in judges and spec parsing |
+| `judge::{VisionModel, VisionJudge, JevJudge}` | Model judges (feature `judges`) |
+| `Store`, `Manifest`, `write_index` | The output directory, for tools of your own |
+| `capture::{headless_app, render_view, capture_window, window_options}` | Headless capture (feature `capture`) |

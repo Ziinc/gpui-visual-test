@@ -218,7 +218,7 @@ pub fn difference(expected: &RgbaImage, actual: &RgbaImage) -> f64 {
     let differing = expected
         .pixels()
         .zip(actual.pixels())
-        .filter(|(a, b)| a.0.iter().zip(b.0.iter()).any(|(a, b)| a.abs_diff(*b) > 8))
+        .filter(|(a, b)| crate::diff::differs(a, b, crate::diff::DEFAULT_THRESHOLD))
         .count();
     differing as f64 / (expected.width() as f64 * expected.height() as f64).max(1.)
 }

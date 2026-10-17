@@ -6,7 +6,10 @@
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use gpui_visual_test::{Expectation, Manifest, Shot, Status, Store, Verdict, judge, write_index};
+use gpui_visual_test::{
+    Expectation, Manifest, Shot, Status, Store, Verdict, diff::DEFAULT_THRESHOLD, image, judge,
+    write_index,
+};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode};
 
@@ -59,7 +62,8 @@ enum Command {
         #[arg(long)]
         hash: Option<String>,
     },
-    /// Check any PNG against expectations. Exits 0 pass, 1 fail, 2 pending.
+    /// Check any PNG against expectations, a baseline, or both. Exits 0
+    /// pass, 1 fail, 2 pending.
     Check {
         image: PathBuf,
         /// An expectation that must hold (repeatable).
@@ -82,8 +86,46 @@ enum Command {
         judge: Option<String>,
         #[arg(long)]
         rejudge: bool,
+        /// Also compare with the approved baseline, failing when more than
+        /// this share (0 to 1) of pixels changed.
+        #[arg(long, value_name = "MAX")]
+        diff: Option<f64>,
+        /// Approved baselines [default: $GPUI_VISUAL_BASELINE_DIR or visual-baselines]
+        #[arg(long)]
+        baseline_dir: Option<PathBuf>,
+        /// Accept the image as the new baseline.
+        #[arg(long)]
+        update_baseline: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Pixel-diff two PNGs. Exits 0 when at most --max of pixels changed
+    /// and the sizes match, else 1.
+    Diff {
+        before: PathBuf,
+        after: PathBuf,
+        /// Write the diff image here: the after image faded, changes in
+        /// magenta.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Share of pixels (0 to 1) allowed to change.
+        #[arg(long, default_value_t = 0.)]
+        max: f64,
+        /// Channel difference (0 to 255) before a pixel counts as changed.
+        #[arg(long, default_value_t = DEFAULT_THRESHOLD)]
+        threshold: u8,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept shots' current images as their pixel-diff baselines.
+    Approve {
+        names: Vec<String>,
+        /// Every shot whose pixel diff failed or has no baseline yet.
+        #[arg(long, conflicts_with = "names")]
+        all: bool,
+        /// Approved baselines [default: where the last diff looked]
+        #[arg(long)]
+        baseline_dir: Option<PathBuf>,
     },
     /// Judge stored shots with a model (all, or the names given).
     Judge {
@@ -171,7 +213,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let pending: Vec<Manifest> = store
                 .list()?
                 .into_iter()
-                .filter(|m| m.checks.iter().any(|e| e.status() == Status::Unsure))
+                .filter(|m| {
+                    m.checks.iter().any(|e| e.status() == Status::Unsure)
+                        || m.diff.as_ref().is_some_and(|d| d.status == Status::Unsure)
+                })
                 .collect();
             if json {
                 print_json(&Value::Array(
@@ -186,6 +231,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         m.name,
                         abs(store.image_path(&m.name)).display()
                     );
+                    if m.diff.as_ref().is_some_and(|d| d.status == Status::Unsure) {
+                        println!("  [diff] no baseline yet");
+                        println!("      cargo visual-test approve {}", m.name);
+                    }
                     for (i, e) in m
                         .checks
                         .iter()
@@ -252,11 +301,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
             scale,
             judge,
             rejudge,
+            diff,
+            baseline_dir,
+            update_baseline,
             json,
         } => {
-            if expect.is_empty() && should.is_empty() {
+            if expect.is_empty() && should.is_empty() && diff.is_none() {
                 bail!(
-                    "give at least one --expect: what a viewer should be able to confirm by looking at the image"
+                    "give at least one --expect (what a viewer should be able to confirm by looking at the image) or --diff"
                 );
             }
             let mut shot = Shot::open(&image)?;
@@ -275,11 +327,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .chain(should.into_iter().map(|t| Expectation::new(t).should()))
                 .collect();
             let judge = pick_judge(judge)?;
-            let outcome = shot
+            let mut check = shot
                 .expect(expectations)
                 .with_dir(store.dir())
                 .rejudge(rejudge)
-                .run(judge.as_ref())?;
+                .update_baseline(update_baseline);
+            if let Some(max) = diff {
+                check = check.with_diff(max);
+            }
+            if let Some(dir) = baseline_dir {
+                check = check.with_baseline_dir(dir);
+            }
+            let outcome = check.run(judge.as_ref())?;
             if json {
                 print_json(&manifest_json(&store, &outcome.manifest))?;
             } else {
@@ -311,11 +370,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 if let Some(state) = m.state.clone() {
                     shot = shot.with_state(state);
                 }
-                let outcome = shot
+                let mut check = shot
                     .expect(m.checks.iter().map(|e| e.expectation.clone()))
                     .with_dir(store.dir())
-                    .rejudge(rejudge)
-                    .run(judge.as_ref())?;
+                    .rejudge(rejudge);
+                if let Some(diff) = &m.diff {
+                    check = check
+                        .with_diff(diff.max)
+                        .with_diff_threshold(diff.threshold);
+                    // `<dir>/<name>.png`, with one level per name segment.
+                    if let Some(dir) = diff.baseline.ancestors().nth(m.name.split('/').count()) {
+                        check = check.with_baseline_dir(dir);
+                    }
+                }
+                let outcome = check.run(judge.as_ref())?;
                 print!("{outcome}");
                 statuses.push(outcome.manifest.status());
             }
@@ -343,6 +411,90 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 );
             }
             Ok(exit_for(overall))
+        }
+        Command::Diff {
+            before,
+            after,
+            out,
+            max,
+            threshold,
+            json,
+        } => {
+            let open = |path: &PathBuf| {
+                image::open(path)
+                    .with_context(|| format!("reading {}", path.display()))
+                    .map(|i| i.to_rgba8())
+            };
+            let d = gpui_visual_test::diff(&open(&before)?, &open(&after)?, threshold);
+            let pass = !d.resized && d.ratio() <= max;
+            if let Some(out) = &out {
+                d.image
+                    .save(out)
+                    .with_context(|| format!("writing {}", out.display()))?;
+            }
+            if json {
+                print_json(&json!({
+                    "status": if pass { Status::Pass } else { Status::Fail },
+                    "changed": d.ratio(),
+                    "pixels": d.changed,
+                    "total": d.total,
+                    "max": max,
+                    "threshold": threshold,
+                    "resized": d.resized,
+                    "bounds": d.bounds,
+                    "image": out.map(abs),
+                }))?;
+            } else {
+                let bounds = d.bounds.map_or(String::new(), |b| {
+                    format!(" within {},{} {}x{} px", b.x, b.y, b.width, b.height)
+                });
+                println!(
+                    "{}: {} of {} pixels changed ({:.2}%, max {:.2}%){bounds}{}",
+                    if pass { "pass" } else { "fail" },
+                    d.changed,
+                    d.total,
+                    d.ratio() * 100.,
+                    max * 100.,
+                    if d.resized { ", sizes differ" } else { "" }
+                );
+            }
+            Ok(if pass {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+        Command::Approve {
+            names,
+            all,
+            baseline_dir,
+        } => {
+            let names: Vec<String> = if all {
+                store
+                    .list()?
+                    .into_iter()
+                    .filter(|m| m.diff.as_ref().is_some_and(|d| d.status != Status::Pass))
+                    .map(|m| m.name)
+                    .collect()
+            } else if names.is_empty() {
+                bail!("name the shots to approve, or pass --all");
+            } else {
+                names
+            };
+            for name in &names {
+                let m = store.approve(name, baseline_dir.as_deref())?;
+                let baseline = m.diff.map_or_else(
+                    || "the default baseline directory".into(),
+                    |d| d.baseline.display().to_string(),
+                );
+                println!("approved {name} -> {baseline}");
+            }
+            if names.is_empty() {
+                println!("nothing to approve in {}", store.dir().display());
+            } else {
+                write_index(&store)?;
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Report => {
             println!("{}", abs(write_index(&store)?).display());
@@ -395,6 +547,16 @@ fn print_manifest(store: &Store, m: &Manifest) {
         m.status(),
         abs(store.image_path(&m.name)).display()
     );
+    if let Some(d) = &m.diff {
+        println!("  [diff] {:6} {}", d.status.to_string(), d.reason);
+        println!("         baseline: {}", d.baseline.display());
+        if let Some(image) = &d.image {
+            println!(
+                "         diff: {}",
+                abs(store.manifest_path(&m.name).with_file_name(image)).display()
+            );
+        }
+    }
     for r in &m.regions {
         println!(
             "  region {}: x={} y={} width={} height={}",
@@ -425,6 +587,16 @@ fn manifest_json(store: &Store, m: &Manifest) -> Value {
         "height": m.height,
         "scale": m.scale,
         "regions": m.regions,
+        "diff": m.diff.as_ref().map(|d| json!({
+            "status": d.status,
+            "reason": d.reason,
+            "changed": d.changed,
+            "max": d.max,
+            "threshold": d.threshold,
+            "bounds": d.bounds,
+            "baseline": d.baseline,
+            "image": d.image.as_ref().map(|i| abs(store.manifest_path(&m.name).with_file_name(i))),
+        })),
         "checks": m.checks.iter().enumerate().map(|(i, e)| json!({
             "index": i,
             "text": e.expectation.text,
