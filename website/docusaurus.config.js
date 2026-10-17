@@ -36,6 +36,7 @@ const config = {
           { to: "/#pixel-diff", label: "Pixel diff", position: "left" },
           { to: "/#judges", label: "Judges", position: "left" },
           { to: "/#agents", label: "Agents & CLI", position: "left" },
+          { to: "/#integrations", label: "Integrations", position: "left" },
           { to: "/#reference", label: "Reference", position: "left" },
           { href: "https://github.com/Ziinc/gpui-visual-test", label: "GitHub", position: "right" },
         ],
@@ -47,7 +48,7 @@ const config = {
       prism: {
         theme: prismThemes.github,
         darkTheme: prismThemes.dracula,
-        additionalLanguages: ["rust", "toml", "bash", "json"],
+        additionalLanguages: ["rust", "toml", "bash", "json", "elixir"],
       },
     }),
 };

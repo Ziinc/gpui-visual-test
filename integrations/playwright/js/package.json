@@ -1,0 +1,12 @@
+{
+  "name": "gpui-visual-test-playwright",
+  "version": "0.1.0",
+  "description": "Plain-English visual checks and pixel diffs for Playwright screenshots, through the cargo visual-test CLI. Works with gpui-playwright and any Playwright page.",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Ziinc/gpui-visual-test",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test" }
+}

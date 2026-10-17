@@ -291,7 +291,7 @@ image. The repository ships this loop as an agent skill in
 
 | Command | Does |
 | --- | --- |
-| `check <png> -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--scale n] [--name n] [--judge spec] [--rejudge] [--diff max] [--baseline-dir d] [--update-baseline] [--json]` | Checks any PNG against expectations, its baseline, or both |
+| `check <png> -e "…" [-e …] [--should "…"] [--region id=x,y,w,h] [--expect-in id=…] [--scale n] [--name n] [--judge spec] [--rejudge] [--diff max] [--baseline-dir d] [--update-baseline] [--json]` | Checks any PNG against expectations, its baseline, or both |
 | `diff <before> <after> [--out png] [--max share] [--threshold n] [--json]` | Pixel-diffs two PNGs; exits 1 past `--max` or on a size change |
 | `approve <name…\|--all> [--baseline-dir d]` | Accepts current images as pixel-diff baselines |
 | `pending [--json]` | Lists undecided expectations, the image to look at, and the command to record each |
@@ -304,6 +304,61 @@ image. The repository ships this loop as an agent skill in
 
 All commands take `--dir` to point at an output directory other than the
 default.
+
+## Integrations {#integrations}
+
+Outside Rust tests, everything goes through `cargo visual-test check --json`,
+so verdict reuse, agent review and pixel diffs behave the same. Each helper
+finds the CLI at `$GPUI_VISUAL_TEST_CLI`, else `cargo-visual-test` on `PATH`.
+
+### Playwright and gpui-playwright
+
+[`integrations/playwright`](https://github.com/Ziinc/gpui-visual-test/tree/main/integrations/playwright) screenshots a Page or
+Locator, turns locators into named regions, and checks the shot. It works
+against a [gpui-playwright](https://github.com/Ziinc/gpui-playwright) app or
+any web page.
+
+```js
+const { expectVisual } = require("gpui-visual-test-playwright");
+
+test("todo list", async ({ page }) => {
+  await expectVisual(page, "todo/seeded", {
+    expect: ["Two todos are listed, neither checked"],
+    expectIn: { add: "The Add button is enabled" },
+    regions: { add: page.getByRole("button", { name: "Add" }) },
+    diff: 0.001,
+  });
+});
+```
+
+Python (`from gpui_visual_test_playwright import expect_visual`) takes the
+same options in snake_case, with `expect_visual_async` for the async API. A
+failure raises `VisualCheckError`, an `AssertionError`.
+
+### Elixir and baguette
+
+[`integrations/elixir`](https://github.com/Ziinc/gpui-visual-test/tree/main/integrations/elixir) (`gpui_visual_test`) checks PNG
+bytes or `{:file, path}` from ExUnit:
+
+```elixir
+import GpuiVisualTest.Assertions
+
+assert_visual png, "counter/initial",
+  expect: ["The count reads 0"],
+  regions: [toolbar: {0, 0, 400, 40}],
+  expect_in: [toolbar: "Save is greyed out"],
+  diff: 0.001
+```
+
+`GpuiVisualTest.check/3` returns `{:ok | :fail | :pending, result}` instead of
+raising.
+
+### A running GPUI app (tauri-gpui)
+
+`capture::window_shot(window, name)` reads back the last frame a live window
+drew, for a test hook or debug command inside the app. It needs a platform
+that implements `PlatformWindow::render_to_image`, as GPUI's headless
+renderer does.
 
 ## Reference
 
