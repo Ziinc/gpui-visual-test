@@ -1,0 +1,113 @@
+{
+  "entrypoints": [
+    "main"
+  ],
+  "origins": {
+    "436": [
+      436
+    ],
+    "780": [
+      780
+    ],
+    "main": [
+      354,
+      869,
+      792
+    ],
+    "runtime~main": [
+      792,
+      869,
+      354
+    ],
+    "1f391b9e": [
+      869,
+      61
+    ],
+    "a7456010": [
+      235
+    ],
+    "e7ce6630": [
+      490
+    ],
+    "styles": [
+      61,
+      354,
+      792,
+      869
+    ]
+  },
+  "assets": {
+    "61": {
+      "js": [
+        {
+          "file": "assets/js/1f391b9e.53294dc3.js",
+          "hash": "761f40606870f439",
+          "publicPath": "/gpui-visual-test/assets/js/1f391b9e.53294dc3.js"
+        }
+      ]
+    },
+    "235": {
+      "js": [
+        {
+          "file": "assets/js/a7456010.fae5b555.js",
+          "hash": "0185174367ab1902",
+          "publicPath": "/gpui-visual-test/assets/js/a7456010.fae5b555.js"
+        }
+      ]
+    },
+    "354": {
+      "js": [
+        {
+          "file": "assets/js/runtime~main.2ff7c957.js",
+          "hash": "8012ddefc42d02c9",
+          "publicPath": "/gpui-visual-test/assets/js/runtime~main.2ff7c957.js"
+        }
+      ]
+    },
+    "436": {
+      "js": [
+        {
+          "file": "assets/js/436.f4e97fea.js",
+          "hash": "6b62409bbf9c5371",
+          "publicPath": "/gpui-visual-test/assets/js/436.f4e97fea.js"
+        }
+      ]
+    },
+    "490": {
+      "js": [
+        {
+          "file": "assets/js/e7ce6630.cc957118.js",
+          "hash": "21ebf7221dcb831a",
+          "publicPath": "/gpui-visual-test/assets/js/e7ce6630.cc957118.js"
+        }
+      ]
+    },
+    "780": {
+      "js": [
+        {
+          "file": "assets/js/780.3e5a2108.js",
+          "hash": "b2f17b61a78bc7df",
+          "publicPath": "/gpui-visual-test/assets/js/780.3e5a2108.js"
+        }
+      ]
+    },
+    "792": {
+      "js": [
+        {
+          "file": "assets/js/main.8ff642c8.js",
+          "hash": "5fbee256cdd06715",
+          "publicPath": "/gpui-visual-test/assets/js/main.8ff642c8.js"
+        }
+      ]
+    },
+    "869": {
+      "css": [
+        {
+          "file": "assets/css/styles.8588d2d4.css",
+          "hash": "a3d288e2bd7f18a9",
+          "publicPath": "/gpui-visual-test/assets/css/styles.8588d2d4.css"
+        }
+      ]
+    }
+  }
+}
