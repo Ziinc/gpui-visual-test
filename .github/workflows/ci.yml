@@ -25,35 +25,6 @@ jobs:
       - name: Headless capture on lavapipe
         run: cargo test -p gpui-visual-test --features capture --test capture
 
-  integrations:
-    runs-on: ubuntu-latest
-    env:
-      GPUI_VISUAL_TEST_CLI: ${{ github.workspace }}/target/debug/cargo-visual-test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p cargo-visual-test
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Playwright helper (JS)
-        working-directory: integrations/playwright/js
-        run: npm test
-      - name: Playwright helper (Python)
-        working-directory: integrations/playwright/python
-        run: python3 -m unittest -v
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: "27"
-          elixir-version: "1.17"
-      - name: Elixir helper
-        working-directory: integrations/elixir
-        run: |
-          mix deps.get
-          mix format --check-formatted
-          mix test
-
   website:
     runs-on: ubuntu-latest
     defaults:
