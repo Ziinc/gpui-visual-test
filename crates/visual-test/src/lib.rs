@@ -41,5 +41,5 @@ pub use image;
 pub use judge::Judge;
 pub use report::write_index;
 pub use shot::{Region, Shot, difference};
-pub use store::{Entry, MANIFEST_VERSION, Manifest, Store};
+pub use store::{Entry, MANIFEST_VERSION, Manifest, Store, shell_word};
 pub use verdict::{Status, Verdict};

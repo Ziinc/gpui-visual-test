@@ -101,7 +101,10 @@ Jev's `p(true)` passes at 0.9 or above and fails at 0.1 or below.
 
 Other knobs: `GPUI_VISUAL_REJUDGE=1` ignores stored verdicts;
 `GPUI_VISUAL_UNSURE=warn` lets undecided expectations (and missing
-baselines) pass with a warning.
+baselines) pass with a warning, in tests and the CLI alike. CLI flags such as
+`--rejudge` only switch things on, so these variables still apply when the
+flag is left out. Relative directories in these variables are from the
+workspace root.
 
 ## The CLI, for agents and people
 

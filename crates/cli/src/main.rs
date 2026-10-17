@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use gpui_visual_test::{
     Expectation, Manifest, Shot, Status, Store, Verdict, diff::DEFAULT_THRESHOLD, image, judge,
-    write_index,
+    shell_word, write_index,
 };
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode};
@@ -153,7 +153,16 @@ fn main() -> ExitCode {
         .enumerate()
         .filter(|(i, a)| !(*i == 1 && a == "visual-test"))
         .map(|(_, a)| a);
-    let cli = Cli::parse_from(args);
+    // Usage errors exit 3 like any other error: clap's own 2 would read as
+    // "pending" to an agent.
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) if !error.use_stderr() => error.exit(),
+        Err(error) => {
+            let _ = error.print();
+            return ExitCode::from(3);
+        }
+    };
     match run(cli) {
         Ok(code) => code,
         Err(error) => {
@@ -168,6 +177,16 @@ fn exit_for(status: Status) -> ExitCode {
         Status::Pass => ExitCode::SUCCESS,
         Status::Fail => ExitCode::from(1),
         Status::Unsure => ExitCode::from(2),
+    }
+}
+
+/// [`exit_for`], except that undecided checks pass when the run allows them
+/// (`GPUI_VISUAL_UNSURE=warn`).
+fn exit_for_outcome(outcome: &gpui_visual_test::Outcome) -> ExitCode {
+    if outcome.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        exit_for(outcome.manifest.status())
     }
 }
 
@@ -233,7 +252,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     );
                     if m.diff.as_ref().is_some_and(|d| d.status == Status::Unsure) {
                         println!("  [diff] no baseline yet");
-                        println!("      cargo visual-test approve {}", m.name);
+                        println!("      cargo visual-test approve {}", shell_word(&m.name));
                     }
                     for (i, e) in m
                         .checks
@@ -244,7 +263,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         println!("  [{i}] {}", describe(&e.expectation));
                         println!(
                             "      cargo visual-test verdict {} {i} pass|fail --reason \"...\"",
-                            m.name
+                            shell_word(&m.name)
                         );
                     }
                 }
@@ -311,6 +330,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     "give at least one --expect (what a viewer should be able to confirm by looking at the image) or --diff"
                 );
             }
+            if diff.is_none() && (update_baseline || baseline_dir.is_some()) {
+                bail!("--update-baseline and --baseline-dir need --diff");
+            }
             let mut shot = Shot::open(&image)?;
             shot = Shot::new(
                 name.unwrap_or_else(|| shot.name().to_string()),
@@ -327,11 +349,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .chain(should.into_iter().map(|t| Expectation::new(t).should()))
                 .collect();
             let judge = pick_judge(judge)?;
-            let mut check = shot
-                .expect(expectations)
-                .with_dir(store.dir())
-                .rejudge(rejudge)
-                .update_baseline(update_baseline);
+            // Flags only switch things on, so GPUI_VISUAL_REJUDGE and
+            // GPUI_VISUAL_UPDATE still work when they are not given.
+            let mut check = shot.expect(expectations).with_dir(store.dir());
+            if rejudge {
+                check = check.rejudge(true);
+            }
+            if update_baseline {
+                check = check.update_baseline(true);
+            }
             if let Some(max) = diff {
                 check = check.with_diff(max);
             }
@@ -344,7 +370,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 print!("{outcome}");
             }
-            Ok(exit_for(outcome.manifest.status()))
+            Ok(exit_for_outcome(&outcome))
         }
         Command::Judge {
             names,
@@ -357,8 +383,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .into_iter()
                 .filter(|m| names.is_empty() || names.contains(&m.name))
                 .collect();
+            if let Some(missing) = names
+                .iter()
+                .find(|n| !manifests.iter().any(|m| &m.name == *n))
+            {
+                bail!("no shot `{missing}` in {}", store.dir().display());
+            }
             if manifests.is_empty() {
-                bail!("no matching shots in {}", store.dir().display());
+                bail!("no shots in {}", store.dir().display());
             }
             let mut statuses = Vec::new();
             for m in manifests {
@@ -372,8 +404,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 let mut check = shot
                     .expect(m.checks.iter().map(|e| e.expectation.clone()))
-                    .with_dir(store.dir())
-                    .rejudge(rejudge);
+                    .with_dir(store.dir());
+                if rejudge {
+                    check = check.rejudge(true);
+                }
                 if let Some(diff) = &m.diff {
                     check = check
                         .with_diff(diff.max)
@@ -385,7 +419,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 let outcome = check.run(judge.as_ref())?;
                 print!("{outcome}");
-                statuses.push(outcome.manifest.status());
+                statuses.push(if outcome.is_ok() {
+                    Status::Pass
+                } else {
+                    outcome.manifest.status()
+                });
             }
             Ok(exit_for(worst(statuses)))
         }
@@ -420,14 +458,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
             threshold,
             json,
         } => {
-            let open = |path: &PathBuf| {
-                image::open(path)
-                    .with_context(|| format!("reading {}", path.display()))
-                    .map(|i| i.to_rgba8())
+            if !(0. ..=1.).contains(&max) {
+                bail!("--max {max} must be between 0 and 1");
+            }
+            // By content, not extension, as `check` reads them.
+            let open = |path: &PathBuf| -> Result<image::RgbaImage> {
+                Ok(image::ImageReader::open(path)
+                    .and_then(|r| r.with_guessed_format())
+                    .with_context(|| format!("reading {}", path.display()))?
+                    .decode()
+                    .with_context(|| format!("decoding {}", path.display()))?
+                    .to_rgba8())
             };
             let d = gpui_visual_test::diff(&open(&before)?, &open(&after)?, threshold);
             let pass = !d.resized && d.ratio() <= max;
             if let Some(out) = &out {
+                if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
+                }
                 d.image
                     .save(out)
                     .with_context(|| format!("writing {}", out.display()))?;
@@ -449,7 +498,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     format!(" within {},{} {}x{} px", b.x, b.y, b.width, b.height)
                 });
                 println!(
-                    "{}: {} of {} pixels changed ({:.2}%, max {:.2}%){bounds}{}",
+                    "{}: {} of {} pixels changed ({:.3}%, max {:.3}%){bounds}{}",
                     if pass { "pass" } else { "fail" },
                     d.changed,
                     d.total,
@@ -479,15 +528,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else if names.is_empty() {
                 bail!("name the shots to approve, or pass --all");
             } else {
+                // Every name must exist before any baseline is written.
+                for name in &names {
+                    store.load(name)?;
+                }
                 names
             };
             for name in &names {
-                let m = store.approve(name, baseline_dir.as_deref())?;
-                let baseline = m.diff.map_or_else(
-                    || "the default baseline directory".into(),
-                    |d| d.baseline.display().to_string(),
-                );
-                println!("approved {name} -> {baseline}");
+                let baseline = store.approve(name, baseline_dir.as_deref())?;
+                println!("approved {name} -> {}", baseline.display());
             }
             if names.is_empty() {
                 println!("nothing to approve in {}", store.dir().display());

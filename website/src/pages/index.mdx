@@ -234,7 +234,7 @@ cargo install --git https://github.com/Ziinc/gpui-visual-test cargo-visual-test
 | 0 | Every `Must` expectation passed |
 | 1 | At least one failed |
 | 2 | At least one needs a decision |
-| 3 | The command itself failed |
+| 3 | The command itself failed, including a mistyped command or flag |
 
 ### The review loop
 
@@ -310,12 +310,13 @@ default.
 ### Output directory
 
 Each check writes to `$GPUI_VISUAL_DIR`, else `visual-test/` under
-`$CARGO_TARGET_DIR` or the workspace's `target/`. Tests and the CLI resolve
+`$CARGO_TARGET_DIR` or the workspace's `target/`. Relative paths in these
+variables, and in `GPUI_VISUAL_BASELINE_DIR`, are from the workspace root. Tests and the CLI resolve
 the same place from anywhere in the workspace.
 
 - `<name>.png`: the shot. A `/` in the name makes subdirectories. Names are
   relative paths of non-empty segments, without `.`, `..`, `\` or `:`,
-  and not ending in `.diff`.
+  not starting with `-` and not ending in `.diff`.
 - `<name>.json`: the manifest, which holds the image hash, size, scale,
   regions, attached state, and each expectation with its latest verdict.
 - `<name>.diff.png`: the pixel diff, when the shot changed from its
@@ -324,10 +325,11 @@ the same place from anywhere in the workspace.
 
 ### When verdicts are reused
 
-A stored verdict is reused when its expectation text matches, its status is
-`pass` or `fail`, and the image is unchanged. The image counts as unchanged
+A stored verdict is reused when its expectation text and region match, its
+status is `pass` or `fail`, the shot's regions are unchanged, and the image
+is unchanged. The image counts as unchanged
 when its pixel hash matches, or when it differs from the stored image in at
-most `with_tolerance(share)` of pixels. When every verdict is reused within
+most `with_tolerance(share)` of pixels, at the same size. When every verdict is reused within
 tolerance, the judged image stays the baseline, so small changes cannot drift
 unnoticed. `unsure` verdicts are always asked again.
 
@@ -341,6 +343,10 @@ unnoticed. `unsure` verdicts are always asked again.
   to a model. Fine detail in a large retina capture can be lost, so clip to
   the area that matters.
 - Only PNG input is read.
+- Tolerance and a pixel diff together let verdicts drift: tolerance compares
+  each run with the previous one, so many small changes can add up without
+  a rejudge. Approving a baseline does not rejudge either. Use
+  `GPUI_VISUAL_REJUDGE=1` after approving a large change.
 - The pixel diff compares exact channels within a threshold. It has no
   anti-aliasing detection, so a baseline from one renderer (lavapipe on CI)
   may not match another (Metal locally); keep baselines from the platform
@@ -356,7 +362,7 @@ unnoticed. `unsure` verdicts are always asked again.
 | --- | --- |
 | `GPUI_VISUAL_JUDGE` | Judge spec for `assert_env` and the CLI (default `agent`) |
 | `GPUI_VISUAL_DIR` | Output directory |
-| `GPUI_VISUAL_REJUDGE=1` | Ignore stored verdicts and judge everything again |
+| `GPUI_VISUAL_REJUDGE=1` | Ignore stored verdicts and judge everything again. `0`, `false`, `no` and `off` turn any of these flags off. |
 | `GPUI_VISUAL_UNSURE=warn` | Let undecided expectations and missing baselines pass with a warning |
 | `GPUI_VISUAL_BASELINE_DIR` | Pixel-diff baselines |
 | `GPUI_VISUAL_UPDATE=1` | Accept every diffed shot as its new baseline |
