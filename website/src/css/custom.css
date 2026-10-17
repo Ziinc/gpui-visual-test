@@ -1,0 +1,59 @@
+:root {
+  --ifm-color-primary: #2e7d5b;
+  --ifm-color-primary-dark: #297152;
+  --ifm-color-primary-darker: #276a4d;
+  --ifm-color-primary-darkest: #20573f;
+  --ifm-color-primary-light: #338964;
+  --ifm-color-primary-lighter: #359069;
+  --ifm-color-primary-lightest: #3ca377;
+  --ifm-code-font-size: 92%;
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #4cc38a;
+  --ifm-color-primary-dark: #3cb87c;
+  --ifm-color-primary-darker: #39ae75;
+  --ifm-color-primary-darkest: #2f8f60;
+  --ifm-color-primary-light: #63ca99;
+  --ifm-color-primary-lighter: #6fcea1;
+  --ifm-color-primary-lightest: #92dab8;
+}
+
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 2.5rem 1rem 4rem;
+}
+
+.hero-lead {
+  font-size: 1.2rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.page h2 {
+  margin-top: 3rem;
+  scroll-margin-top: 5rem;
+}
+
+.page h3 {
+  scroll-margin-top: 5rem;
+}
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 1.5rem 0;
+}
+
+.pipeline span {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.pipeline b {
+  color: var(--ifm-color-emphasis-500);
+}
