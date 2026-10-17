@@ -187,8 +187,33 @@ impl VisionModel {
     }
 }
 
+/// Longest edge, in pixels, sent to a model. Providers reject or silently
+/// downscale larger images (Anthropic caps at 8000 px and 5 MB; OpenAI tiles
+/// to 2048), and a retina capture of a large window easily exceeds that.
+const MAX_MODEL_EDGE: u32 = 2048;
+
 fn png_base64(shot: &Shot) -> Result<String> {
-    Ok(base64::engine::general_purpose::STANDARD.encode(shot.png()?))
+    let png = model_png(shot)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+/// The shot as PNG, downscaled so its longest edge fits [`MAX_MODEL_EDGE`].
+/// Prompts give sizes in logical pixels, so the scale change is invisible to
+/// the model.
+fn model_png(shot: &Shot) -> Result<Vec<u8>> {
+    let (w, h) = shot.image().dimensions();
+    let longest = w.max(h);
+    if longest <= MAX_MODEL_EDGE {
+        return shot.png();
+    }
+    let ratio = MAX_MODEL_EDGE as f64 / longest as f64;
+    let (nw, nh) = (
+        ((w as f64 * ratio).round() as u32).max(1),
+        ((h as f64 * ratio).round() as u32).max(1),
+    );
+    let small =
+        image::imageops::resize(shot.image(), nw, nh, image::imageops::FilterType::Triangle);
+    Shot::new(shot.name(), small, shot.scale() * ratio as f32).png()
 }
 
 fn tool_input(response: &Value) -> Option<Value> {
@@ -239,6 +264,16 @@ mod tests {
         ]});
         assert_eq!(tool_input(&response), Some(json!({"verdicts": []})));
         assert_eq!(text_of(&response).as_deref(), Some("Here you go. "));
+    }
+
+    #[test]
+    fn large_shots_are_downscaled_for_models() {
+        let big = Shot::new("big", image::RgbaImage::new(5000, 1000), 2.);
+        let png = model_png(&big).unwrap();
+        let back = image::load_from_memory(&png).unwrap();
+        assert_eq!((back.width(), back.height()), (2048, 410));
+        let small = Shot::new("small", image::RgbaImage::new(300, 200), 1.);
+        assert_eq!(model_png(&small).unwrap(), small.png().unwrap());
     }
 
     #[test]

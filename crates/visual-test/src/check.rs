@@ -68,6 +68,8 @@ impl Check {
                 self.shot.name()
             );
         }
+        Store::validate_name(self.shot.name())?;
+        self.shot.validate()?;
         let name = self.shot.name().to_string();
         let manifest_path = self.store.manifest_path(&name);
         let image_path = self.store.image_path(&name);
@@ -85,18 +87,26 @@ impl Check {
                     }))
         });
 
+        // Match earlier verdicts by text and occurrence, so two identical
+        // expectations keep their own verdicts.
         let mut verdicts: Vec<Option<Verdict>> = self
             .expectations
             .iter()
-            .map(|expectation| {
+            .enumerate()
+            .map(|(i, expectation)| {
                 if self.rejudge || !unchanged {
                     return None;
                 }
+                let nth = self.expectations[..i]
+                    .iter()
+                    .filter(|e| e.text == expectation.text)
+                    .count();
                 previous
                     .as_ref()?
                     .checks
                     .iter()
-                    .find(|entry| entry.expectation.text == expectation.text)
+                    .filter(|entry| entry.expectation.text == expectation.text)
+                    .nth(nth)
                     .and_then(|entry| entry.verdict.clone())
                     .filter(|verdict| verdict.status != Status::Unsure)
             })

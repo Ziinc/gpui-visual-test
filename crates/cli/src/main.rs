@@ -54,6 +54,10 @@ enum Command {
         /// Who decided [default: agent].
         #[arg(long, default_value = "agent")]
         judge: String,
+        /// The image hash you looked at (`hash` in `pending --json`). Refuses
+        /// to record if the image has changed since.
+        #[arg(long)]
+        hash: Option<String>,
     },
     /// Check any PNG against expectations. Exits 0 pass, 1 fail, 2 pending.
     Check {
@@ -217,7 +221,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             status,
             reason,
             judge,
+            hash,
         } => {
+            if let Some(hash) = hash {
+                let current = store.load(&name)?.hash;
+                if current != hash {
+                    bail!(
+                        "`{name}` changed since you looked (hash {current}, not {hash}); look at the image again"
+                    );
+                }
+            }
             let index = match index.as_str() {
                 "all" => None,
                 n => Some(
@@ -407,6 +420,7 @@ fn manifest_json(store: &Store, m: &Manifest) -> Value {
         "status": m.status(),
         "image": abs(store.image_path(&m.name)),
         "manifest": abs(store.manifest_path(&m.name)),
+        "hash": m.hash,
         "width": m.width,
         "height": m.height,
         "scale": m.scale,
