@@ -13,6 +13,8 @@ by looking at it, and let a judge decide:
   answers each expectation with a probability, and only what Jev is unsure of
   goes back to the vision model.
 
+The [documentation site](website/) (`cd website && npm install && npm start`) covers everything on one page.
+
 Verdicts are stored next to each image and reused while the image is
 unchanged, so a model is called (or an agent asked) only when a shot changes.
 
